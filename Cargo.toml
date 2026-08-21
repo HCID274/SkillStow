@@ -3,7 +3,7 @@ name = "skillstow"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/HCID274/skillstow"
+repository = "https://github.com/HCID274/SkillStow"
 description = "给 AI skill 用的 GNU Stow：一个 git 仓库存真身，软链投影到各个 AI 工具目录"
 
 # 依赖白名单见 docs/SPEC.md 第 6 节。

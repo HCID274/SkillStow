@@ -86,7 +86,7 @@ cargo check 通过（不是编译坏了）
 | D22 | adapt 的职责 | **只有两件事，不加戏。**(1) 真身仓出现 manifest 没覆盖的新 skill → 问要不要排除某些工具；(2) 工具目录里发现仓库外的野生 skill → 问要不要收编。没有跨平台改写、没有内容适配、没有格式转换。它小到几乎不需要 AI，用 skill 做只是因为你本来就在 AI 里干活。 | R6 |
 | D23 | 仓库结构与配置 | 真身仓 **根平铺**：skill 目录直接在仓库根，`skillstow.toml`（工具定义 + 例外表）也在根，格式 **TOML**。判断规则：**非隐藏、且含 `SKILL.md` 的目录才是 skill**，其余随便放。（原定 `skills/` 子目录已推翻——它和 D25 的 `~/skills` 撞成 `~/skills/skills/`，而子目录换来的好处是零：配置是文件、skill 是目录，撞不了；投影由 manifest 逐个驱动，根上的文件永远投不出去。）机器本地配置在 `~/.config/skillstow/config.toml`（Windows 走 `%APPDATA%`），**不进仓库**——本地配置进仓库，三台机器的路径差异就会变成 git 冲突；能不产生的冲突就别产生。本地配置只有三样：真身仓在哪、这台机器启用哪些工具、路径覆盖。 | R6 |
 | D24 | 命令面 | **三条，一条不多。**`init [--import-from <dir>]` / `sync` / `status`。不加 `link`/`unlink`（多一条绕过 manifest 的路径，manifest 就不再是唯一真相，D18 废掉）；不加 `--dry-run`（`status` 就是）；不加 `rollback`（D19 说了就是 git，包了糖就会想给糖加参数）。 | R6 |
-| D25 | 真身仓库位置 | 本地 **`~/skills`**（可见目录，不放隐藏目录，更**绝不放在任何 AI 工具的目录里**——那正是 D11 要逃离的东西），GitHub 私有仓 `HCID274/skills`。代码仓是 `HCID274/skillstow`，**两个仓互不嵌套，代码仓里不出现任何 skill 文件，也不需要 gitignore**。`~/skills` 只是默认值，本地配置第一项就是真身仓路径，任何人都能改。**选短路径是真的设计参数**：按 D11 真身是唯一编辑源，你天天要 `cd` 进去改 skill；路径一长你就会去改软链那头，改软链那头就绕过了真身。 | R7 |
+| D25 | 真身仓库位置 | 本地 **`~/skills`**（可见目录，不放隐藏目录，更**绝不放在任何 AI 工具的目录里**——那正是 D11 要逃离的东西），GitHub 私有仓 `HCID274/skills`。代码仓是 `HCID274/SkillStow`（GitHub 仓库名大小写不敏感，所以数据仓不可能也叫 skillstow——这个名字已被代码仓占用），**两个仓互不嵌套，代码仓里不出现任何 skill 文件，也不需要 gitignore**。`~/skills` 只是默认值，本地配置第一项就是真身仓路径，任何人都能改。**选短路径是真的设计参数**：按 D11 真身是唯一编辑源，你天天要 `cd` 进去改 skill；路径一长你就会去改软链那头，改软链那头就绕过了真身。 | R7 |
 | D26 | sync 时机与待办 | v1 **只有手动** `skillstow sync`（自动化不在 D20 范围）。但现在就定死三条设计约束，否则以后加自动化要改代码：**幂等、零交互、退出码有意义**（0 成功 / 非 0 失败且原因写 stderr）。满足这三条，cron / launchd / Windows 计划任务 / shell hook 以后全都能直接调。待办文件放**本地** `~/.config/skillstow/pending.md`——待决定的**过程**留本地（天天变，进仓库会制造大量无意义冲突），决定的**结果**进 manifest 全机器共享。 | R7 |
 | D28 | 项目命名 | **skillstow**（原 SkillRiver）。理由：(1) **机制准确**——它就是给 AI skill 用的 GNU Stow，目标用户看名字就懂，不用读 README；(2) **唯一性极好**——GitHub 3 个同名全 0 star，crates.io 干净，搜这个词只会搜到你（对比 `skillsync` 有 2495 个同名）；(3) **隐喻不会把你往回拽**——river 暗示持续流动、有上下游、有中心水源，上一版的 Hub、长轮询、设备游标、流式对账正是这个词的自然产物；stow 是一次性动作。 | R8 |
 | D27 | 迁移与备份 | `.system/` 那 6 个 Codex 自带 skill **不进真身仓库**，skillstow 明确忽略隐藏目录（同步它等于让三台机器互相覆盖对方的工具内置文件）。搬法：**先复制后切换**——`cp -a` → `git init` + 首次 commit → 验证一致 → 才把 `~/.codex/skills/` 原目录改名 `.bak` 并建链 → 一周后再删 `.bak`。**第一次 commit 完成那一刻之前所有操作不可逆，之后全都可逆。** | R7 |
@@ -113,10 +113,10 @@ cargo check 通过（不是编译坏了）
       → 还原方式：`git clone ~/skillriver-v0-archive.bundle`
 - [x] 清空项目目录（16 GB → 0）并删除 `.git`
 - [x] `git init` 重开，首个提交 `fcb3746` 只含决策日志、行为契约、任务分派、三条护栏、可编译空骨架
-- [ ] **待用户操作**：GitHub 删除 `HCID274/SkillRiver`，新建 `HCID274/skillstow`（public），
-      新建 `HCID274/skills`（private）
-- [ ] 拿到 URL 后 `git remote add origin` 并 push
-- [ ] 本地目录 `SkillRiver` 改名为 `skillstow`（会改变本会话的工作目录，建议会话结束后再做）
+- [ ] **待用户操作**：GitHub 删除 `HCID274/SkillRiver`（已完成），新建 `HCID274/SkillStow`（public，已完成），
+      新建数据仓 `HCID274/skills`（private，**待办**）
+- [x] `git remote add origin git@github.com:HCID274/SkillStow.git` 并 push
+- [x] 本地目录改名为 `~/Documents/HCID274/Own/SkillStow`
 
 > D16 已按此调整：原定"原地重开 + 改名"改为"彻底删除 + 全新仓库"，
 > 理由是即使原地重开，`v0-archive` tag 仍在同一仓库里、`git clone` 默认会拉下来，
