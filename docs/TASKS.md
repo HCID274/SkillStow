@@ -9,7 +9,13 @@
 
 ---
 
-## T0 — 平台探针（必须最先做，单独做）
+## T0 — 平台探针　✅ 已完成（2026-08-21）
+
+结论见 `docs/PLATFORM_NOTES.md`。它改动了 SPEC 3.3、7.1、7.2 并新增了 2.5，
+**写 `link.rs` 前必须先读**。下面保留原任务描述作为记录。
+
+<details><summary>原任务</summary>
+
 
 **这个任务不写产品代码。**产出一份 `docs/PLATFORM_NOTES.md`。
 
@@ -28,6 +34,8 @@
 - 验收：四个问题各有一段实验代码、一段实际输出、一句结论。
   结论与 SPEC 假设不符的，直接改 SPEC 7.2 并说明。
 
+</details>
+
 ---
 
 ## T1 — 配置读写
@@ -45,13 +53,15 @@
 
 ---
 
-## T2 — 平台链接原语（依赖 T0）
+## T2 — 平台链接原语（T0 已完成，可以开工）
 
 - 独占文件：`src/link.rs`
 - 内容：`create(target, link)` / `remove(link)` / `classify(path) -> Missing | OurLink | ForeignLink | RealDir | RealFile`。
-  `classify` 判断 `OurLink` 的唯一依据是**链指向 repo 内部**（SPEC 3.3），
-  实现方式按 T0 的实测结论决定。
-  Windows 走 SPEC 7.1：先试 `symlink_dir`，失败 shell out `mklink /J`。
+  `classify` 判断 `OurLink` 的唯一依据是**链指向 repo 内部**（SPEC 3.3）。
+  Windows 建链一律 `mklink /J`，**不要**试 `symlink_dir`（SPEC 7.1）。
+  拆链只准 `remove_dir`，**禁止 `remove_dir_all`**（SPEC 7.2）。
+  注意 junction 的 `symlink_metadata().is_dir()` 是 false，判目录性质要用 `metadata()`。
+  **动手前先读 `docs/PLATFORM_NOTES.md`。**
 - 预算：150 行
 - 验收：在 macOS 和 Windows 各跑一遍
   ```

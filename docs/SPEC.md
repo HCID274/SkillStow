@@ -107,6 +107,20 @@ skip = ["md2hci", "coros-trainingcalendar-ops"]
 
 `skip` 里写了不存在的 skill 名：**警告，不报错**（可能在别的分支上）。
 
+### 2.5 真身仓禁止符号链接条目
+
+仓库里**不允许出现 git 模式为 `120000` 的条目**。`init --import-from` 遇到符号链接
+必须**固化**（复制它指向的真实内容），不能原样保存链接。
+
+T0 实测（PLATFORM_NOTES 第 3 节）：Windows 上 `core.symlinks` 默认 `false`，
+`120000` 条目会被检出成一个内容为目标路径的普通文本文件，skill 直接失效。
+
+这条不是假想。导入时 `~/skills/pua` 就是一个指向 `~/.codex/pua/skills/pua` 的符号链接，
+被以 `120000` 提交，29 个文件 204 KB 实际没有入库也没有备份，
+在提交 `abb2ce5` 才固化。上一版项目的提交 `617741a` 标题也叫「固化符号链接」——同一个坑踩过两次。
+
+`sync` 每次应顺带检查：发现 `120000` 条目就写进 `pending.md` 并提示固化方法。
+
 ### 2.3 `~/.config/skillstow/pending.md`（不进仓库，本机待办）
 
 由 sync 每次**整体重写**（不是追加）。没有待办时写一个空标题即可。格式：
@@ -169,7 +183,8 @@ for tool in config.tools:
 | 现状 | desired 里有 | desired 里没有 | 动作 |
 | --- | --- | --- | --- |
 | 不存在 | ✓ | | **建链** |
-| 是链，且指向 `repo` 内部 | ✓ | | **拆掉重建**（不读取链目标，见 7.2） |
+| 是链，指向 `repo` 内且**目标正确** | ✓ | | **跳过**（幂等的关键，不要每次重建） |
+| 是链，指向 `repo` 内但**目标不对** | ✓ | | `remove_dir` 后重建 |
 | 是链，且指向 `repo` 内部 | | ✓ | **拆链**（这是我们建的，现在不该有了） |
 | 是链，指向 `repo` 外部 | 任意 | 任意 | **不动**，写进 pending.md |
 | 是真实目录或文件 | 任意 | 任意 | **不动**，写进 pending.md（野生 skill） |
@@ -177,8 +192,10 @@ for tool in config.tools:
 **判断「这条链是不是我们建的」的唯一判据：它指向 `repo` 内部。**
 不用数据库、不用标记文件、不用 xattr。这条判据是整个程序能保持简单的关键，不要改。
 
-**「拆掉重建」而不是「读目标比对」的理由见 7.2。**它让程序完全不需要读取链目标，
-从而绕开 Windows junction 的全部麻烦。拆链不碰目标内容，安全且幂等。
+读链目标用 `std::fs::read_link`，**Windows 的 junction 上实测可用**（PLATFORM_NOTES 第 1 节）。
+「目标已经正确就跳过」是 SPEC 4.2 幂等要求的落点：不要每次 sync 都把 72 条链拆了重建。
+
+拆链只准用 `remove_dir`，禁止 `remove_dir_all`，理由见 7.2。
 
 ---
 
@@ -293,30 +310,33 @@ manifest 一旦不是唯一真相 D18 就废了）、`--dry-run`（`status` 就�
 | 平台 | 做法 |
 | --- | --- |
 | Unix | `std::os::unix::fs::symlink(target, link)` |
-| Windows | 先试 `std::os::windows::fs::symlink_dir`（开发者模式或管理员下可成功）；
-失败则 shell out `cmd /C mklink /J <link> <target>` 建 junction |
+| Windows | shell out `cmd /C mklink /J <link> <target>` 建 junction。**不要**再去试
+`std::os::windows::fs::symlink_dir` |
 
-D14 定的是 **junction 优先、零提权**。真符号链接只是"能用就用"的加分项，不是前提。
-**不要**去检测开发者模式的注册表键——直接试，失败就退化，这样代码少一半。
+T0 实测（`docs/PLATFORM_NOTES.md` 第 0 节）：普通用户 `mklink /J` 成功退出码 0；
+`symlink_dir` 报 `os error 1314`（无所需特权）。真符号链接对本程序没有任何额外好处
+（只链本地目录），保留那个分支等于每建一条链先失败一次系统调用——
+24 个 skill × 3 个工具 = 72 次注定失败的调用换零收益。**也不要**检测开发者模式注册表键。
 
-### 7.2 四处必须先验证的未知（T0 任务）
+### 7.2 已实测，不要再猜（T0 已完成）
 
-我不确定下面三条在 Windows 上的实际行为。**不要照着我的猜测写代码**，
-先用 5 行的实验程序验证，把结果写进 `docs/PLATFORM_NOTES.md`，再写正式实现。
+四条关键行为已在真实 Windows 上验证，结论和它们改动了哪条规范，全部记在
+**`docs/PLATFORM_NOTES.md`**。写 `link.rs` 之前先读它。摘要：
 
-0. **不提权能不能建 junction？`std::os::windows::fs::symlink_dir` 在没开发者模式时是什么错误？**
-   D14 整个「Junction 为主、零提权」的决策建立在这条假设上。假设错了，D14 要重做，
-   要么改成要求开发者模式（对 D8 开源是实打实的流失），要么改成 Windows 上一律复制。
+| 问题 | 实测结论 |
+| --- | --- |
+| 不提权建 junction | **可以**，`mklink /J` 退出码 0；`symlink_dir` 报 1314 无特权 |
+| junction 的 `is_symlink()` | **true**；且 `read_link()` **可用**，能拿到目标路径 |
+| `remove_dir` / `remove_dir_all` 删 junction | 都**只删链本身**，目标内容不受影响 |
+| `core.symlinks` 默认值 | **false**；`120000` 条目会被检出成内容为目标路径的普通文本文件 |
 
-1. **`std::fs::symlink_metadata(p).file_type().is_symlink()` 对 junction 返回什么？**
-   本规范假设返回 `true`。如果返回 `false`，第 3.3 节区分「链」和「真实目录」的判据就要改，
-   届时的替代方案是 `std::fs::metadata` 与 `symlink_metadata` 的 `file_type` 不一致即为链。
-2. **`std::fs::remove_dir(p)` 对 junction 的行为？**
-   本规范假设它只删除 junction 本身、不递归删除目标内容。
-   **这条如果错了会删掉用户的真身数据**，必须在一个临时目录里实测确认，这是全项目最高风险的一处。
-3. **`git pull` 在 Windows 上把仓库里的符号链接 checkout 成什么？**
-   真身仓里的 skill 是真实目录，理论上不涉及。但 `~/.claude/skills/show-then-tell` 这类
-   如果被收编，仓库里可能出现符号链接条目。确认 `core.symlinks=false` 时的表现。
+**实现者必踩的坑**：junction 的 `symlink_metadata().is_dir()` 返回 **false**。
+要判断链指向的是不是目录，必须用跟随链接的 `metadata()`。
+
+**会删东西的路径只准用 `remove_dir`，禁止 `remove_dir_all`。**
+不是因为实测不安全（实测两者都安全），而是因为失败方向不同：
+万一 `classify` 判错、把一个真实非空目录当成链，`remove_dir` 会安全失败（目录非空），
+`remove_dir_all` 会把用户数据删光。一个 fail-safe，一个 fail-dangerous。
 
 ### 7.3 跨平台路径
 
