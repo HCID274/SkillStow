@@ -106,12 +106,22 @@ cargo check 通过（不是编译坏了）
 
 > 这四步做完，916 KB 第一次拥有历史和异地备份。D2 里"历史回滚"这个痛点在这一刻就已经解决了一半。
 
-### 阶段 1 — 归档旧代码
+### 阶段 1 — 归档旧代码　✅ 已完成（2026-08-21）
 
-- [ ] 决定 57 个未提交文件 + 64 个未跟踪条目的去留（建议全部提交进归档，不要挑）
-- [ ] 打 tag `v0-archive` 并 push
-- [ ] GitHub 仓库改名 `SkillRiver` → `skillstow`，本地 `git remote set-url`
-- [ ] 清空 main，只保留本文件
+- [x] 57 个未提交文件 + 64 个未跟踪条目全部提交（`f013a24`）
+- [x] 全部历史打包成单文件 **`~/skillriver-v0-archive.bundle`**（1.3 MB，`git bundle verify` 确认完整）
+      → 还原方式：`git clone ~/skillriver-v0-archive.bundle`
+- [x] 清空项目目录（16 GB → 0）并删除 `.git`
+- [x] `git init` 重开，首个提交 `fcb3746` 只含决策日志、行为契约、任务分派、三条护栏、可编译空骨架
+- [ ] **待用户操作**：GitHub 删除 `HCID274/SkillRiver`，新建 `HCID274/skillstow`（public），
+      新建 `HCID274/skills`（private）
+- [ ] 拿到 URL 后 `git remote add origin` 并 push
+- [ ] 本地目录 `SkillRiver` 改名为 `skillstow`（会改变本会话的工作目录，建议会话结束后再做）
+
+> D16 已按此调整：原定"原地重开 + 改名"改为"彻底删除 + 全新仓库"，
+> 理由是即使原地重开，`v0-archive` tag 仍在同一仓库里、`git clone` 默认会拉下来，
+> 实习生 AI 探索时会撞见那 80,886 行并照着写。隔离靠仓库，不靠叮嘱。
+> 历史不丢——它在 bundle 里。
 
 ### 阶段 2 — 写 v1（1000 行绊线随时生效）
 
