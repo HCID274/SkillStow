@@ -99,10 +99,20 @@ cargo check 通过（不是编译坏了）
 
 ### 阶段 0 — 先保住数据（唯一不可逆的部分，先做完）
 
-- [ ] `mkdir -p ~/skills`，`cp -a` 把 `~/.codex/skills/` 下 23 个**非隐藏**目录复制过去（跳过 `.system/`），结果形如 `~/skills/dlog/SKILL.md`
-- [ ] `cd ~/skills && git init && git add -A && git commit`
-- [ ] GitHub 建私有仓 `HCID274/skills`，push
-- [ ] 逐目录 diff 验证 `~/skills/` 与 `~/.codex/skills/` 内容一致
+- [x] 复制 `~/.codex/skills/` 下 23 个非隐藏目录到 `~/skills/`（跳过 `.system/` 那 6 个 Codex 自带的）
+- [x] 另从 `~/.claude/skills/` 导入 `show-then-tell`（它此前没有任何备份）
+- [x] `git init` + 首个提交 `25d5e7e`：24 个 skill / 121 个文件 / 1.8 MB
+- [x] **逐文件 sha256 校验和比对**，24 个全部一致
+      （注意：`diff` 在本机被 shell 快照里的一个函数覆盖并静默失败、退出码恒为 0，
+      不能用它做校验，必须用校验和）
+- [x] 建立 `skillstow.toml`，初始例外表**精确复现 2026-08-21 的现状**，第一次 sync 应为零变更
+- [x] `.gitignore` 只挡运行时状态（`.state/`、`.DS_Store`）
+- [ ] **待用户操作**：GitHub 新建 `HCID274/skills`（**private**），然后 push
+
+> 决定记录：`luna-vision-worker/credentials.json` 含一个真实 API key。
+> 用户明确决定入库，理由是数据仓是私有的，且这样 Windows 上不必重新配置一次。
+> 唯一需要记住的后果：key 进了 git 历史就是永久的，将来彻底清除要 `git filter-repo`；
+> 轮换 key 不受影响。
 
 > 这四步做完，916 KB 第一次拥有历史和异地备份。D2 里"历史回滚"这个痛点在这一刻就已经解决了一半。
 
