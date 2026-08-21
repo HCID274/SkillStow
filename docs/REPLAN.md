@@ -107,7 +107,10 @@ cargo check 通过（不是编译坏了）
       不能用它做校验，必须用校验和）
 - [x] 建立 `skillstow.toml`，初始例外表**精确复现 2026-08-21 的现状**，第一次 sync 应为零变更
 - [x] `.gitignore` 只挡运行时状态（`.state/`、`.DS_Store`）
-- [ ] **待用户操作**：GitHub 新建 `HCID274/skills`（**private**），然后 push
+- [x] GitHub 私有仓 `HCID274/skills` 已建立并推送（`25d5e7e`）
+      （私有性验证方式：匿名 API 返回 404、同时用户 SSH 密钥 `ls-remote` 成功——两者同时成立即为私有）
+
+**阶段 0 全部完成。用户的 24 个 skill 现在有本地 git 历史 + GitHub 异地备份。**
 
 > 决定记录：`luna-vision-worker/credentials.json` 含一个真实 API key。
 > 用户明确决定入库，理由是数据仓是私有的，且这样 Windows 上不必重新配置一次。
@@ -123,8 +126,7 @@ cargo check 通过（不是编译坏了）
       → 还原方式：`git clone ~/skillriver-v0-archive.bundle`
 - [x] 清空项目目录（16 GB → 0）并删除 `.git`
 - [x] `git init` 重开，首个提交 `fcb3746` 只含决策日志、行为契约、任务分派、三条护栏、可编译空骨架
-- [ ] **待用户操作**：GitHub 删除 `HCID274/SkillRiver`（已完成），新建 `HCID274/SkillStow`（public，已完成），
-      新建数据仓 `HCID274/skills`（private，**待办**）
+- [x] GitHub 删除 `HCID274/SkillRiver`、新建 `HCID274/SkillStow`（public）、新建 `HCID274/skills`（private）
 - [x] `git remote add origin git@github.com:HCID274/SkillStow.git` 并 push
 - [x] 本地目录改名为 `~/Documents/HCID274/Own/SkillStow`
 
