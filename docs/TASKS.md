@@ -13,8 +13,10 @@
 
 **这个任务不写产品代码。**产出一份 `docs/PLATFORM_NOTES.md`。
 
-在一台 Windows 机器上，用最小的实验程序（每个 5 到 10 行）验证 `SPEC.md` 7.2 的三个问题：
+在一台 Windows 机器上，用最小的实验程序（每个 5 到 10 行）验证 `SPEC.md` 7.2 的四个问题：
 
+0. 不提权能不能 `mklink /J` 建 junction？`std::os::windows::fs::symlink_dir`
+   在没开发者模式时报什么错？（D14「Junction 为主、零提权」整个建立在这条上）
 1. `std::fs::symlink_metadata(p).file_type().is_symlink()` 对 junction 返回 true 还是 false？
 2. **`std::fs::remove_dir(p)` 对 junction 是只删链本身，还是会递归删掉目标里的内容？**
 3. `git` 在 `core.symlinks=false` 时把仓库里的符号链接 checkout 成什么？
@@ -23,7 +25,7 @@
 会删光用户的真身 skill。**必须在一个塞了假数据的临时目录里实测，确认之后才允许写 `link.rs`。**
 
 - 独占文件：`docs/PLATFORM_NOTES.md`
-- 验收：三个问题各有一段实验代码、一段实际输出、一句结论。
+- 验收：四个问题各有一段实验代码、一段实际输出、一句结论。
   结论与 SPEC 假设不符的，直接改 SPEC 7.2 并说明。
 
 ---

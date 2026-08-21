@@ -29,6 +29,23 @@ skillstow sync = git pull --rebase  →  刷新链  →  git push
 **不做的事**（每条都是上一版做了并且失败了的）：不做内容改写、不做格式转换、
 不做冲突合并、不做设备注册、不做通知、不做服务端、不做后台常驻、不做文件监听。
 
+### 1.1 平台差异不由本程序处理
+
+同一个 skill 在不同操作系统上确实可能需要不同行为（例：`md2hci/templates/gongwen.typ`
+写死了 `Songti SC / Heiti SC`，这是 macOS 系统字体，Windows 上没有）。
+
+**处理它的位置是 skill 内部，不是 skillstow。**skill 文件在所有机器上逐字节相同，
+平台分支写进内容里，由**读这个 skill 的 AI** 在运行时选择——AI 天然知道自己跑在什么系统上。
+用户的 skill 本来就在用渐进披露（`SKILL.md` 短，细节在 `references/`、`scripts/`、
+`templates/`），加一个 `platform/windows.md` 让 AI 按需读，是顺理成章的写法。
+
+**绝不允许的相反做法**：让 skillstow 往不同机器投不同版本的文件。
+一旦投影不等于真身，下面这些立刻全部需要：投影脏没脏的检测、本机当前活跃版本的记录、
+回滚时的重新组装——这正是上一版 `Bundle` / `Active` / `staged_bundle` 的全部来源。
+D19「回滚就是 git checkout」是「投影逐字节等于真身」白送的，破坏这一条，礼物就没了。
+
+如果某个 skill 在某台机器上完全没意义，用 SPEC 2.4 的 `skip` 把它挡掉，而不是改它的内容。
+
 ---
 
 ## 2. 数据模型
@@ -64,6 +81,7 @@ Windows 路径为 `%APPDATA%\skillstow\config.toml`。
 ```toml
 repo  = "~/skills"                    # 真身仓在哪
 tools = ["claude", "codex", "zcode"]  # 这台机器启用哪些工具
+skip  = []                            # 这台机器不要的 skill，见 2.4
 
 # 可选：覆盖 skillstow.toml 里的 path。Windows 或非标准安装位置用。
 [overrides]
@@ -72,6 +90,22 @@ codex = "D:\\codex\\skills"
 
 - `tools` 里出现 `skillstow.toml` 未定义的工具名：**报错退出**（码 2）。这是拼写错误。
 - 这个文件不进仓库的理由见 D23：三台机器的路径差异进仓库就会变成 git 冲突。
+
+### 2.4 `skip`：这台机器不要哪些 skill
+
+```toml
+skip = ["md2hci", "coros-trainingcalendar-ops"]
+```
+
+被 skip 的 skill 在这台机器上一条链都不建；已经建了的会被拆掉。它仍然在真身仓里、
+仍然有历史、仍然同步到本机磁盘，只是不投影给任何工具。
+
+**为什么放在本机配置而不是共享清单里：**你真正要表达的是「**这台机器**上不要这个」，
+「平台」只是它的代理变量——同样是 Windows，装了 pandoc 的那台就该有 `md2hci`。
+把 OS 作为维度写进共享清单，是四层 Profile 的第一块砖（D7 明确拒绝了这条路）。
+代价是每台机器各写一次；对个人几台机器的规模，这个代价比引入一个新维度小得多。
+
+`skip` 里写了不存在的 skill 名：**警告，不报错**（可能在别的分支上）。
 
 ### 2.3 `~/.config/skillstow/pending.md`（不进仓库，本机待办）
 
@@ -114,7 +148,8 @@ desired = {}
 for tool in config.tools:
     tool_dir = overrides[tool] or skillstow.toml.tools[tool].path   # 展开 ~
     for skill in skills:
-        if tool in exclude.get(skill, []): continue
+        if skill in config.skip: continue                 # 本机不要（SPEC 2.4）
+        if tool in exclude.get(skill, []): continue       # 清单里的工具例外
         desired[tool_dir / skill] = repo / skill
 ```
 
@@ -264,10 +299,14 @@ manifest 一旦不是唯一真相 D18 就废了）、`--dry-run`（`status` 就�
 D14 定的是 **junction 优先、零提权**。真符号链接只是"能用就用"的加分项，不是前提。
 **不要**去检测开发者模式的注册表键——直接试，失败就退化，这样代码少一半。
 
-### 7.2 三处必须先验证的未知（T0 任务）
+### 7.2 四处必须先验证的未知（T0 任务）
 
 我不确定下面三条在 Windows 上的实际行为。**不要照着我的猜测写代码**，
 先用 5 行的实验程序验证，把结果写进 `docs/PLATFORM_NOTES.md`，再写正式实现。
+
+0. **不提权能不能建 junction？`std::os::windows::fs::symlink_dir` 在没开发者模式时是什么错误？**
+   D14 整个「Junction 为主、零提权」的决策建立在这条假设上。假设错了，D14 要重做，
+   要么改成要求开发者模式（对 D8 开源是实打实的流失），要么改成 Windows 上一律复制。
 
 1. **`std::fs::symlink_metadata(p).file_type().is_symlink()` 对 junction 返回什么？**
    本规范假设返回 `true`。如果返回 `false`，第 3.3 节区分「链」和「真实目录」的判据就要改，
