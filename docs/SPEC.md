@@ -67,7 +67,7 @@ after_apply = []
 codex = "~/.codex/skills"
 ```
 
-repo、工具绝对路径、before_publish 和 after_apply 是本机配置，不进入内容仓。两种钩子都是可选的 argv 数组；before_publish 在提交前及 rebase 后校验候选，after_apply 在发布后应用本机内容。钩子，通过直接启动程序执行，不经过 shell；仅放本机明确安装的适配器，不自动执行仓库内脚本。
+repo、工具绝对路径、before_publish 和 after_apply 是本机配置，不进入内容仓。两种钩子都是可选的 argv 数组；before_publish 在提交前及 rebase 后校验候选，after_apply 在发布后应用本机内容。钩子通过直接启动程序执行，不经过 shell；仅放本机明确安装的适配器，不自动执行仓库内脚本。
 完整旧式 runtime 的适配器为 `migration/apply_runtime.py`：保留凭据、插件、缓存和状态，备份实际变化，验证并刷新原有投影；检测到活动副本被另行修改时停止，要求先合并回维护仓。
 
 ## 命令

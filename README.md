@@ -4,6 +4,8 @@
 
 现已接入 Mac、HomeServer、Shenzhen。Windows 接入按用户要求暂缓。当前部署和实测结果见 [交付记录](docs/DELIVERY.md)，行为契约见 [SPEC](docs/SPEC.md)。
 
+在本目录开启新对话时，从 [AGENTS.md](AGENTS.md) 和 [交接状态](docs/HANDOFF.md) 继续；[已确认需求](docs/REQUIREMENTS.md) 与 [当前待办](docs/TASKS.md) 均已保存在本仓，无需旧 SkillRiver 目录。
+
 ## 日常维护
 
 已接入设备可直接让 AI 使用 `skillstow-maintain`。本次安装路径为 `~/.local/bin/skillstow`，配置为 `~/.config/skillstow/config.toml`。
