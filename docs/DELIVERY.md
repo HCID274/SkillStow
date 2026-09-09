@@ -1,55 +1,46 @@
-# 首批三设备交付记录
+# 四端统一模块交付
 
-日期：2026-09-06。当前范围：Mac、HomeServer、Shenzhen；Windows 由用户明确暂缓。
+日期：2026-09-09。此记录替代 2026-09-06 的三设备阶段；旧记录保留在 Git 历史。
 
-## 已落地
+## 结果与归属
 
-- 从占位 SkillStow 实现完整目录包、设备独立选择、依赖解析、Git 对账与发布、编辑隔离、必要删除确认、本机应用收据。
-- 个人数据使用现有私有仓库 `HCID274/skills`，所有设备持有完整 checkout。当前内容布局为 systems/mac、systems/homeserver、systems/shenzhen。
-- 当前 runtime 共享依赖按完整设备包导入；各设备原有 manifest、overlay、独有能力和凭据保留。HomeServer 的 development-toolchain、debian-host-bootstrap 与 Shenzhen 的 panclilocal 均保留。
-- 原 Mac 单向同步入口改为兼容入口；skillgo、agent-skill-ops 和 runtime 维护入口均引导到 skillstow-maintain。
-- 所有受管内容经发布前 runtime 校验；应用有备份、漂移保护和恢复路径。状态、缓存、投影、凭据、第三方插件不作为个人规范源复制。
+私人内容仓 HCID274/skills 只登记一个 personal-skill-system 模块。system/manifest.json 明确源位置与设备范围；四端持有完整 checkout，共享 Skill 的规范源只有一份，设备专属源也在同一仓。客户端只安装适用内容。
 
-## 实机证据
+共同规则明确：对整个体系优先删减，必要时再补；定位、分发、校验和状态查询优先用程序；影响目标、范围、验收、授权或关键取舍的歧义先复述对齐。规则从同一源生成 Codex AGENTS.md，并由 Claude CLAUDE.md 导入本机应用后的同一正文。
 
-三台设备均已返回 `applied=true`，提交为 `531530385730f28853ccbe5f0f10fd11c4a33a4d`，受管工作区干净，无编辑标记和未完成投影动作。
-
-真实维护顺序：
-
-1. Mac 导入并发布各设备内容；随后发布同步机制文档更新 `fe27f5e`。
-2. HomeServer 修改三端的维护恢复经验和新入口回归断言，发布 `2fffc0b`；Mac、Shenzhen 的后台任务自动接收，收据及相同维护文件摘要一致。
-3. Shenzhen 将各端旧维护入口接入 SkillStow，发布 `5315303`；Mac、HomeServer 自动接收并返回相同提交的实际应用收据。
-
-客户端实际枚举成功：Mac 62、HomeServer 44、Shenzhen 53 个可发现 Skills（含宿主技能与插件）；三端均包含 skillstow-maintain，枚举错误为 0。这些数字不是个人叶子数量；个人体系分别为 37、24、37 个叶子。
-
-## 后台与访问
-
-| 设备 | 后台方式 | GitHub 访问 |
+| 源范围 | Skills | 应用设备 |
 | --- | --- | --- |
-| Mac | launchd，60 秒检查 | HTTPS，使用本机已登录的 GitHub CLI；SSH 22/443 经诊断仍有间歇超时 |
-| HomeServer | 用户 crontab，60 秒检查 | 仅限 Skills 仓的专用可写 deploy key |
-| Shenzhen | systemd 用户 timer，60 秒检查；已开启该用户 linger | 现有 GitHub SSH 身份 |
+| 单一共享源 | engineering、decision-grade-reporting、personal-tools、skillstow-maintain | 四端 |
+| Mac 专属源 | mac-ops | Mac |
+| Windows 专属源 | windows-automation | Windows 原生账户 |
+| HomeServer 专属源 | host-ops | HomeServer |
+| 深圳专属源 | panclilocal | Shenzhen |
 
-SSH 经 HomeServer 跳转只用于 Mac 临时登录/传输到 Shenzhen；内容同步由三台设备分别连接 GitHub 完成，不依赖 SSH 中转链。
+最终共 8 个个人 Skill 源，每端 5 个、7 个内容文件。Mac 原生 Codex 枚举的个人条目由 45 降为 5；这不是总插件数或实测 Token 数。退出旧树、LRU、SQLite 遥测和原调用 Hook，保留凭据、宿主 .system 与第三方插件。
 
-## 验证范围
+## 内容发布与逐端应用
 
-- 15 项真实 Git 集成测试：资源完整性、设备版本、跨设备维护、并发修改、冲突恢复、编辑隔离、静默窗口、外部文件保护、删除确认、遗漏资源、发布前校验、失败收据和同层版本歧义。
-- 同层设备版本歧义测试在修复前失败、修复后通过。
-- 原 Mac runtime 的 36 项测试通过；新入口引起的两处固定计数断言随行为更新。
-- 隔离迁移验证：首次应用、重复应用、凭据保留、活动漂移阻断、合并回维护仓后的恢复、新增资源投放。
-- cargo clippy -- -D warnings、cargo fmt、git diff --check 通过。
+内容 main 最终提交 aa5ce833a8b21d85a9d955aa248a6ac8d99af904 已 push。相对改动前 eea566702b0849eba234b6a5ac0a3eb69b8fc2e5，981 文件变更，新增 248 行、删除 101310 行；统计包含旧多设备副本、脚本与历史资源，不能等同模型上下文删减。最终内容仓 15 个跟踪文件，其中模块 12 个。
 
-## 使用与恢复
+真实双向链路逐一验证：Mac 发布 3da55e7、HomeServer 发布 4ca55b7、Shenzhen 发布 7ff578d、Windows 发布 e4b5d83，每次其他三端均收到对应内容。最后 Mac 删除临时验证文件，另外三端由各自后台任务接收最终版本，未手工触发接收。
 
-三端 CLI：`~/.local/bin/skillstow`；配置：`~/.config/skillstow/config.toml`；维护仓：`~/.local/share/skillstow/workspace`。
+| 设备 | 程序 | 最终收据 | 后台实机证据 |
+| --- | --- | --- | --- |
+| Mac | 0.2.0 | aa5ce83，applied=true | launchd，60 秒，最近退出 0 |
+| Windows | 原生 0.2.0 | aa5ce83，applied=true | SkillStowSync 计划任务，60 秒，LastTaskResult=0 |
+| HomeServer | Linux 0.2.0 | aa5ce83，applied=true | 用户 crontab，60 秒；自动接收最终提交 |
+| Shenzhen | Linux 0.2.0 | aa5ce83，applied=true | systemd 用户 timer，60 秒；服务后续执行退出 0 |
 
-日常使用 skillstow-maintain，或按 README 的 edit begin/finish 流程操作。不要直接修改 `.codex/skills` 活动副本；若已经发生，先把差异合并回维护仓，重新发布后适配器允许对齐。
+四端工作区干净、无编辑标记、临时验证文件不存在；逐文件 SHA-256 与模块状态一致，全局正文一致。已安装适配器 SHA-256 均为 4f0d34d5d6cd5984a50fa1d32fbbaf19bd165dbb7efd37b32d9b0cce0eafa1ea。Mac 的 fleet 实查四端均 reachable=true，收据为同一最终提交。
 
-应用备份位于 `~/.local/state/skillstow/backups/`，文件状态清单为同目录上层的 runtime.json。恢复旧内容优先在维护仓 `git revert` 对应提交，然后通过正常同步发布；Git 冲突保留现场由 AI 处理。
+Windows 已配置本机仓库专用可写 GitHub deploy key；秘密未进入仓库。初次检出产生的纯换行差异保留于本机备份后重新检出，后续统一 LF。首次接管后四端移除日常 --adopt，避免重复迁移。深圳收据查询使用已验证的原 SSH 公网端点；其 Tailscale 22 端口此次不可达，不影响设备各自通过 GitHub 同步。
 
-## 未纳入本轮
+## 验证和边界
 
-- Windows 实机接入。CLI 已保留 junction 分支；现有私人 runtime 的 Unix 依赖仍需在 Windows 接入时适配和验证，不能据本轮 Linux 测试声称 Windows 已可用。
-- 公众服务、Hub、签名发布协议、网页控制台和项目级差异产品化。
-- GitHub 主分支并未建立防绕过的签名/强制校验协议。本轮发布边界由个人 CLI、维护 Skill 与本机钩子实现；其他设备应用状态以各自收据为准。
+- 每个平台执行真实 Git 集成测试 17 项及模块测试 12 项。Mac、HomeServer、Shenzhen 全部通过；Windows 27 项通过，2 项因 Unix 文件模式或符号链接权限跳过，其 junction、资源、迁移与发布链路通过。
+- cargo fmt --check、cargo clippy -- -D warnings、git diff --check 通过；8 个入口通过 skill-creator 格式校验。Mac 最后复核明确使用已安装的 release 0.2.0；遗留旧 debug 二进制不作为候选版本。
+- 四端启动新的 Codex app-server，通过原生 skills/list 枚举到准确 5 个个人 Skill，错误为 0。HomeServer 与 Windows 的 Claude 原生控制协议也返回相同 5 个个人命令。验证未发送模型任务。
+- Mac、Shenzhen 未找到 Claude CLI，只验证共享目录和全局导入落盘；不能声称这两端 Claude 已实际加载。Windows 范围为原生账户，不包括 WSL。
+- 文件已同步不会清空已有会话上下文；新任务读取新规则，已有任务需要实际重读。旧内容可从 Git 历史或本机逐文件迁移备份恢复。
+
+程序源码与内容分别发布。程序开发分支为 codex/unified-skill-module，运行版本已独立部署四端；代码合入主分支以对应 PR 状态为准，不以内容 main 推断代码已合并。

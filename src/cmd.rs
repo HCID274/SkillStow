@@ -173,6 +173,7 @@ pub fn init(p: &Path, repo: PathBuf, device: String, tools: Vec<String>) -> Resu
         overrides: BTreeMap::new(),
         after_apply: Vec::new(),
         before_publish: Vec::new(),
+        module_adapter: Vec::new(),
     };
     repo::check(&c.repo)?;
     let m = manifest(&c.repo)?;
@@ -222,6 +223,11 @@ fn perform(p: &Path, message: &str, approve_removals: bool) -> Result<i32> {
             "包含删除或版本替换；核对 impact 并取得发起端授权后使用 --approve-removals"
         );
         let sha = repo::git(&c.repo, &["rev-parse", "HEAD"])?;
+        // 接收已发布版本时只需应用，避免每分钟重复 push 和再次 fetch。
+        if sha == repo::git(&c.repo, &["rev-parse", "origin/main"])? {
+            ensure!(!repo::dirty(&c.repo)?, "应用前出现新修改，请继续同步");
+            return Ok(if activate(p, &c, &sha)? == 0 { 0 } else { 1 });
+        }
         match repo::git(&c.repo, &["push", "origin", "HEAD:refs/heads/main"]) {
             Ok(_) => {
                 // push 后再次确认 main 包含该提交；网络不确定时保留事务供重试。
@@ -337,6 +343,13 @@ pub fn status(p: &Path) -> Result<i32> {
 }
 
 fn report_impact(c: &Local, candidate: &Manifest) -> Result<bool> {
+    if !c.module_adapter.is_empty() {
+        return match module_run(c, &["impact"])? {
+            0 => Ok(false),
+            3 => Ok(true),
+            code => anyhow::bail!("模块影响分析失败：{code}"),
+        };
+    }
     let old: Manifest = toml::from_str(&repo::git(
         &c.repo,
         &["show", "origin/main:skillstow.toml"],
@@ -435,4 +448,25 @@ fn hook(args: &[String], cwd: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+// 只执行本机安装并明确配置的适配器，不执行内容仓中的任意程序。
+fn module_run(c: &Local, args: &[&str]) -> Result<i32> {
+    let program = c
+        .module_adapter
+        .first()
+        .context("本机未配置 module_adapter")?;
+    Ok(std::process::Command::new(program)
+        .args(&c.module_adapter[1..])
+        .arg("--repo")
+        .arg(&c.repo)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .status()?
+        .code()
+        .unwrap_or(2))
+}
+pub fn module(p: &Path, args: &[&str]) -> Result<i32> {
+    let c = config::load(p)?;
+    module_run(&c, args)
 }

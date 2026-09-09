@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """为已验收的本机安装产品后台同步定时器。"""
 import os
+import base64
+import json
 from pathlib import Path
 import plistlib
 import subprocess
 import sys
 
 home=Path.home()
-exe=home/'.local/bin/skillstow'; config=home/'.config/skillstow/config.toml'
+exe=home/'.local/bin'/('skillstow.exe' if os.name=='nt' else 'skillstow'); config=home/'.config/skillstow/config.toml'
 assert exe.is_file() and config.is_file(), '先安装并验收 SkillStow'
 if sys.platform=='darwin':
     label='com.hcid274.skillstow'
@@ -19,6 +21,25 @@ if sys.platform=='darwin':
     if p.exists(): raise SystemExit('定时器已存在，请审核并更新已有配置')
     p.write_bytes(plistlib.dumps(data))
     subprocess.run(['launchctl','bootstrap',f'gui/{os.getuid()}',str(p)],check=True)
+elif os.name=='nt':
+    # S4U 后台身份不依赖交互桌面，Git 使用本机仓库专用 SSH 密钥。
+    payload=base64.b64encode(json.dumps({'exe':str(exe),'config':str(config)}).encode()).decode()
+    command=r'''$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'
+$d=[System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('PAYLOAD')) | ConvertFrom-Json
+$arguments='--config "'+$d.config+'" sync --background'
+$existing=Get-ScheduledTask -TaskName SkillStowSync -ErrorAction SilentlyContinue
+if ($existing) {
+ if ($existing.Actions.Execute -eq $d.exe -and $existing.Actions.Arguments -eq $arguments) { exit 0 }
+ throw 'Existing SkillStowSync has a different action; inspect before replacement.'
+}
+$action=New-ScheduledTaskAction -Execute $d.exe -Argument $arguments -WorkingDirectory $env:USERPROFILE
+$trigger=New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(1)) -RepetitionInterval (New-TimeSpan -Minutes 1)
+$principal=New-ScheduledTaskPrincipal -UserId ($env:COMPUTERNAME+'\'+$env:USERNAME) -LogonType S4U -RunLevel Limited
+$settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 3)
+Register-ScheduledTask -TaskName SkillStowSync -Action $action -Trigger $trigger -Principal $principal -Settings $settings | Out-Null
+'''.replace('PAYLOAD',payload)
+    encoded=base64.b64encode(command.encode('utf-16le')).decode()
+    subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-EncodedCommand',encoded],check=True)
 elif '--cron' in sys.argv:
     import shlex
     result=subprocess.run(['crontab','-l'],capture_output=True,text=True)

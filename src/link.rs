@@ -24,6 +24,11 @@ pub fn normalize(p: &Path) -> PathBuf {
             _ => out.push(c),
         }
     }
+    // Windows junction 的 read_link 返回 verbatim 前缀；与普通配置路径统一比较。
+    #[cfg(windows)]
+    if let Some(path) = out.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        return PathBuf::from(path);
+    }
     out
 }
 pub fn classify(p: &Path) -> Result<State> {
@@ -48,10 +53,15 @@ pub fn create(target: &Path, dest: &Path) -> Result<()> {
     std::os::unix::fs::symlink(target, dest)?;
     #[cfg(windows)]
     {
+        let windows_path = |p: &Path| {
+            p.to_string_lossy()
+                .trim_start_matches(r"\\?\")
+                .replace('/', r"\")
+        };
         let output = std::process::Command::new("cmd")
             .args(["/D", "/C", "mklink", "/J"])
-            .arg(dest)
-            .arg(target)
+            .arg(windows_path(dest))
+            .arg(windows_path(target))
             .output()?;
         ensure!(
             output.status.success(),

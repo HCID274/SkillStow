@@ -36,7 +36,8 @@ pub fn dirty(p: &Path) -> Result<bool> {
 }
 pub fn check(p: &Path) -> Result<()> {
     ensure!(
-        git(p, &["rev-parse", "--show-toplevel"])? == path(p)?,
+        Path::new(&git(p, &["rev-parse", "--show-toplevel"])?).canonicalize()?
+            == p.canonicalize()?,
         "必须指定 Git 仓库根目录"
     );
     ensure!(
