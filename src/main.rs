@@ -33,6 +33,10 @@ enum Action {
         approve_removals: bool,
     },
     Status,
+    Locate {
+        skill: String,
+    },
+    Fleet,
     Impact,
     Edit {
         #[command(subcommand)]
@@ -66,6 +70,8 @@ fn main() {
                 approve_removals,
             } => cmd::sync(&p, &message, background, approve_removals),
             Action::Status => cmd::status(&p),
+            Action::Locate { skill } => cmd::module(&p, &["locate", &skill]),
+            Action::Fleet => cmd::module(&p, &["fleet"]),
             Action::Impact => cmd::impact(&p),
             Action::Edit { command } => cmd::edit(&p, command),
         }

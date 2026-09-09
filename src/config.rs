@@ -17,6 +17,8 @@ pub struct Local {
     #[serde(default)]
     pub before_publish: Vec<String>,
     #[serde(default)]
+    pub module_adapter: Vec<String>,
+    #[serde(default)]
     pub overrides: BTreeMap<String, PathBuf>,
 }
 #[derive(Debug, Default, Deserialize)]

@@ -93,6 +93,23 @@ enabled = ["review"]
         git(self.b,'add','-A'); git(self.b,'-c','core.editor=true','rebase','--continue')
         self.cli('b','edit','finish')
         self.assertFalse((self.configs['b'].parent/'editing').exists())
+    def test_receiver_does_not_need_a_working_push_endpoint(self):
+        git(self.a,'config','remote.origin.pushurl',str(self.root/'no-push-endpoint.git'))
+        self.cli('a','sync')
+        self.cli('a','status')
+
+    def test_unreachable_origin_preserves_edit_and_recovers(self):
+        self.cli('a','edit','begin')
+        write(self.a/'skills/review/common/references/recovered.md','pending offline update')
+        before=git(self.a,'rev-parse','HEAD')
+        git(self.a,'remote','set-url','origin',str(self.root/'unreachable.git'))
+        self.cli('a','edit','finish',code=2)
+        self.assertEqual(before,git(self.a,'rev-parse','HEAD'))
+        self.assertTrue((self.configs['a'].parent/'editing').exists())
+        git(self.a,'remote','set-url','origin',str(self.origin))
+        self.cli('a','edit','finish');self.cli('b','sync')
+        self.assertEqual((self.b/'skills/review/common/references/recovered.md').read_text(),'pending offline update')
+
     def test_foreign_files_survive(self):
         foreign = self.root/'tool-a/foreign/SKILL.md'; write(foreign,'user owned')
         self.cli('a','sync',code=1)
@@ -138,13 +155,13 @@ enabled = ["review"]
     def test_prepublication_hook_blocks_invalid_runtime(self):
         before=git(self.origin,'rev-parse','main')
         cfg=self.configs['a']
-        cfg.write_text(cfg.read_text().replace('[overrides]',f'before_publish = ["{sys.executable}", "-c", "raise SystemExit(1)"]\n[overrides]'))
+        cfg.write_text(cfg.read_text().replace('[overrides]',f'before_publish = ["{pathlib.Path(sys.executable).as_posix()}", "-c", "raise SystemExit(1)"]\n[overrides]'))
         write(self.a/'skills/review/common/references/new.md','candidate')
         self.cli('a','sync',code=2)
         self.assertEqual(before,git(self.origin,'rev-parse','main'))
     def test_adapter_failure_not_reported_applied(self):
         cfg=self.configs['a']
-        text=cfg.read_text().replace('[overrides]',f'after_apply = ["{sys.executable}", "-c", "raise SystemExit(1)"]\n[overrides]')
+        text=cfg.read_text().replace('[overrides]',f'after_apply = ["{pathlib.Path(sys.executable).as_posix()}", "-c", "raise SystemExit(1)"]\n[overrides]')
         cfg.write_text(text)
         self.cli('a','sync',code=2)
         self.cli('a','status',code=1)

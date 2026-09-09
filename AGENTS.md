@@ -1,12 +1,9 @@
 # SkillStow 工作入口
 
-这里是当前有效的实现仓库。新对话先读 [交接状态](docs/HANDOFF.md)、[已确认需求](docs/REQUIREMENTS.md)、[行为契约](docs/SPEC.md) 和 [开发约定](CONTRIBUTING.md)，按任务需要查阅 [交付证据](docs/DELIVERY.md)。
+先读 docs/HANDOFF.md 与 docs/SPEC.md。这里是程序仓；私人 Skills 规范源在独立内容仓，不复制进本仓。
 
-- 用户已确认以 SkillStow 替代旧 SkillRiver。所需需求、决策和接续信息均在本仓；不依赖旧目录，不恢复旧 Hub、签名或 PR 审批系统。
-- 首批 Mac、HomeServer、Shenzhen 已部署并完成双向维护验收。Windows 由用户暂缓，不能当作已完成，也不阻塞这三台设备使用。
-- 本仓保存 CLI、迁移适配器、测试和项目文档。个人 Skills 正文与资源在独立私有数据仓；不得复制进本代码仓。
-- 修改个人 Skills 时，读取已安装的 `skillstow-maintain`，先 `edit begin`，只修改返回的维护仓，完成后主动 `edit finish` 并解决冲突。不要直接改 `.codex/skills` 活动副本或 `published/`。
-- 修改本仓代码和文档采用普通 Git 开发流程，不需要开启个人 Skills 的编辑任务。提交按能力分批，使用中文 Conventional Commits；部署证据与代码推送分别报告。
-- 用户明确由自己删除旧项目目录。不要替用户删除。
+用户最新确认：将 Mac、Windows、HomeServer、Shenzhen 的整个 Skills 系统精简并统一为一个模块。宁可多删、按需补回，也不保留重复、过时或必要性不明的规则和机制；设备独有内容同样筛选。遇到影响目标、范围、验收或关键取舍的歧义，先复述并对齐。
 
-`docs/REPLAN.md`、`docs/SPEC-20260821.md`、`docs/TASKS-20260821.md` 是历史资料，不能覆盖当前需求和契约。
+共享源一份，设备范围由模块清单决定；CLI 和本机安装的适配器完成定位、同步、应用及收据查询。普通任务不加载全树，不恢复 LRU、遥测、角色或固定审核链。
+
+个人源修改使用已安装 skillstow-maintain 的 edit begin/finish；本代码仓采用普通 Git 开发流程。用户已授权的必要工作继续完成，不重复确认。保护已有修改，不强推。按风险验证；代码 push、内容发布、各设备应用、客户端发现分别报告。
