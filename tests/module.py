@@ -163,6 +163,18 @@ class ModuleTest(unittest.TestCase):
         self.assertEqual(actual['hooks']['PostToolUse'][0]['hooks'], [{'command': 'keep-me'}])
         self.assertEqual(actual['other'], 1)
 
+    def test_device_rules_are_scoped_and_update_with_sync(self):
+        self.m['devices']['a'].update(ssh='user@cluster.example.org', global_rules='devices/a/rules.md')
+        self.write('devices/a/rules.md', 'Cluster event rules\n'); self.manifest()
+        self.apply('a', True); self.apply('b', True)
+        self.assertEqual((self.base / 'a/.codex/AGENTS.md').read_text(), 'Global\n\nCluster event rules\n')
+        self.assertEqual((self.base / 'b/.codex/AGENTS.md').read_text(), 'Global\n')
+        self.assertEqual((self.base / 'a/.claude/CLAUDE.md').read_text(), '@../.codex/AGENTS.md\n')
+        self.write('devices/a/rules.md', 'Updated rules\n'); self.apply('a')
+        self.assertIn('Updated rules', (self.base / 'a/.codex/AGENTS.md').read_text())
+        self.m['devices']['a']['global_rules'] = '../outside'; self.manifest()
+        with self.assertRaises(ValueError): module.load(self.root)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

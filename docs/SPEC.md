@@ -14,7 +14,7 @@ edit begin 先对账并持久暂停本机后台发布；edit finish 发布完成
 
 外层 skillstow.toml 继续支持普通目录包、设备启用集合和设备/平台/通用版本。私人体系只登记一个 personal-skill-system 通用包，指向 system/；四端选择同一个源。
 
-system/manifest.json 是模块内部唯一的 Skill 归属清单：version、devices（平台和 SSH 端点）、skills（源目录及适用设备）。Skill 的正文、脚本与参考资源随其目录完整管理。每端完整 checkout，应用阶段按清单筛选。
+system/manifest.json 是模块内部唯一的 Skill 归属清单：version、devices（平台、SSH 端点及可选 global_rules）、skills（源目录及适用设备）。Skill 的正文、脚本与参考资源随其目录完整管理。每端完整 checkout，应用阶段按清单筛选。
 
 本机 config.toml 的 module_adapter argv 指向明确安装的 migration/skill_module.py。before_publish 调用 validate，after_apply 调用 apply --device ID。CLI 不执行内容仓中任意脚本。
 
@@ -37,3 +37,5 @@ CLI：0 为成功/正常等待，1 为应用阻塞，2 为失败。模块适配�
 receipt.toml 中 applied=true 只证明该端应用流程完成；不替代真实客户端枚举。模块状态包含应用提交、文件摘要、启用集合和备份位置。不变的同版本同步不创建新备份。
 
 tests/e2e.py 使用真实 Git 双 checkout；tests/module.py 验证单一源、设备范围、资源删除、凭据保留、漂移拒绝、失败回滚及旧 Hook 定向退出。Windows 原生和 Linux 实机验证分别记录，不用平台探针替代完整链路。
+
+设备 SSH 端点支持 user@主机名；global_rules 是模块内文件路径，仅追加到该设备的全局入口。Claude 引用同一生成入口，其他设备仍使用共享规则。设备规则随每次应用更新，禁止路径外逸。

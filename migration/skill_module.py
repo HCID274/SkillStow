@@ -45,8 +45,12 @@ def load(root):
     for name, d in m['devices'].items():
         if not re.fullmatch(r'[a-z0-9-]+', name) or d['platform'] not in {'macos', 'linux', 'windows'}:
             raise ValueError(f'非法设备：{name}')
-        if not re.fullmatch(r'[a-zA-Z0-9_]+@[0-9.]+', d['ssh']):
+        if not re.fullmatch(r'[a-zA-Z0-9_]+@[a-zA-Z0-9][a-zA-Z0-9.-]*', d['ssh']):
             raise ValueError(f'非法 SSH 目标：{name}')
+        if 'global_rules' in d:
+            rules = root / relative(d['global_rules'])
+            if not rules.is_file() or rules.is_symlink() or not rules.resolve().is_relative_to(root.resolve()):
+                raise ValueError(f'非法设备规则：{name}')
     for name, entry in m['skills'].items():
         if not re.fullmatch(r'[a-z0-9-]+', name) or set(entry) != {'source', 'devices'}:
             raise ValueError(f'非法 Skill：{name}')
@@ -235,8 +239,11 @@ def apply(root, m, device, home, adopt):
         for client in ('.agents', '.claude'):
             journal.link(home / client / 'skills', active)
         global_source = active / 'decision-grade-reporting/references/global-collaboration.md'
-        journal.write(home / '.codex/AGENTS.md', global_source.read_bytes())
-        journal.write(home / '.claude/CLAUDE.md', b'@../.codex/skills/decision-grade-reporting/references/global-collaboration.md\n')
+        global_data = global_source.read_bytes()
+        if 'global_rules' in m['devices'][device]:
+            global_data += b'\n' + (root / relative(m['devices'][device]['global_rules'])).read_bytes()
+        journal.write(home / '.codex/AGENTS.md', global_data)
+        journal.write(home / '.claude/CLAUDE.md', b'@../.codex/AGENTS.md\n' if 'global_rules' in m['devices'][device] else b'@../.codex/skills/decision-grade-reporting/references/global-collaboration.md\n')
         for rel in ('.codex/hooks.json', '.claude/settings.json'):
             p = home / rel
             if p.exists():
