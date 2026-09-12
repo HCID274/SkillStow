@@ -47,6 +47,8 @@ def load(root):
             raise ValueError(f'非法设备：{name}')
         if not re.fullmatch(r'[a-zA-Z0-9_]+@[a-zA-Z0-9][a-zA-Z0-9.-]*', d['ssh']):
             raise ValueError(f'非法 SSH 目标：{name}')
+        if 'sync_from' in d and (d['sync_from'] not in m['devices'] or d['sync_from'] == name):
+            raise ValueError(f'非法推送来源：{name}')
         if 'global_rules' in d:
             rules = root / relative(d['global_rules'])
             if not rules.is_file() or rules.is_symlink() or not rules.resolve().is_relative_to(root.resolve()):
@@ -306,6 +308,8 @@ def fleet(root, m, home):
     local = tomllib.loads(own.read_text(encoding='utf-8')).get('device') if own.exists() else None
     def query(item):
         name, d = item
+        if d.get('sync_from') and local not in {name, d['sync_from']}:
+            return name, {'reachable': False, 'error': '仅由指定推送端查询：' + d['sync_from']}
         try:
             if name == local:
                 r = read_receipt(home)
