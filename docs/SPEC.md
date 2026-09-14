@@ -40,6 +40,4 @@ tests/e2e.py 使用真实 Git 双 checkout；tests/module.py 验证单一源、�
 
 设备 SSH 端点支持 user@主机名；global_rules 是模块内文件路径，仅追加到该设备的全局入口。Claude 引用同一生成入口，其他设备仍使用共享规则。设备规则随每次应用更新，禁止路径外逸。
 
-## 单向接收设备
-
-模块设备可用 sync_from 指定唯一推送设备。migration/push_device.py 由 Mac 的 launchd 周期调用；仅发送已成功应用且工作区干净的提交，收到目标应用回执才记为成功。接收端使用本地 Git bundle，拒绝提交身份不符、分叉和本地修改，应用后写收据；不配置远端认证或拉取定时器。接收端 skillstow 入口仅支持 status/locate；fleet 在非指定源上跳过该设备。Mac 离线或 SSH 认证失效时等待后续成功连接，不转用其他设备。
+所有设备（含 plasma-fes）使用同一标准 CLI、Git 发布与后台同步流程。设备范围及额外全局约束由清单决定，运行依赖与仓库凭据保存在本机配置；不再维护单向推送或被动接收包装。
