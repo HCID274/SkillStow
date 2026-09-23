@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -37,10 +38,8 @@ class ModuleTest(unittest.TestCase):
 
     def tearDown(self):
         # Windows junction 不能交给递归目录清理猜测；先明确移除链接自身。
-        for name in ['a', 'b']:
-            for client in ['.agents', '.claude']:
-                p = self.base / name / client / 'skills'
-                if module.linked(p): module.unlink(p)
+        for p in [*self.base.glob('*/.agents/skills'), *self.base.glob('*/.claude/skills'), *self.base.glob('*/.agents/skills/*')]:
+            if module.linked(p): module.unlink(p)
         self.temp.cleanup()
 
     def write(self, rel, text):
@@ -52,6 +51,21 @@ class ModuleTest(unittest.TestCase):
 
     def apply(self, name, adopt=False):
         module.apply(self.root, module.load(self.root), name, self.base / name, adopt)
+
+    def commit(self):
+        subprocess.run(['git', '-C', str(self.repo), 'add', '-A'], check=True)
+        subprocess.run(['git', '-C', str(self.repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'next'], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(self.repo), 'update-ref', 'refs/remotes/origin/main', 'HEAD'], check=True)
+
+    def project(self, folder='proj'):
+        # 项目路径按本机平台登记，Windows 原生运行时用 windows 设备。
+        self.dev, self.other = ('b', 'a') if os.name == 'nt' else ('a', 'b')
+        path = self.base / folder
+        self.m['devices'][self.dev]['projects'] = {'proj': str(path)}
+        self.m['skills']['tool'] = {'source': 'projects/proj/tool', 'project': 'proj'}
+        self.write('projects/proj/tool/SKILL.md', '---\nname: tool\ndescription: Test\n---\nProject\n')
+        self.manifest()
+        return path
 
     def test_scope_single_source_and_client_links(self):
         self.apply('a', True); self.apply('b', True)
@@ -176,6 +190,61 @@ class ModuleTest(unittest.TestCase):
         self.assertIn('Updated rules', (self.base / 'a/.codex/AGENTS.md').read_text())
         self.m['devices']['a']['global_rules'] = '../outside'; self.manifest()
         with self.assertRaises(ValueError): module.load(self.root)
+
+    def test_project_skill_lands_only_in_its_project(self):
+        proj = self.project(); proj.mkdir()
+        self.write('projects/proj/tool/references/deep/note.md', 'resource')
+        self.apply(self.dev, True); self.apply(self.other, True)
+        self.assertIn('Project', (proj / '.agents/skills/tool/SKILL.md').read_text())
+        self.assertTrue(module.linked(proj / '.claude/skills'))
+        self.assertTrue((proj / '.claude/skills/tool/references/deep/note.md').exists())
+        for name in ['a', 'b']:
+            self.assertFalse((self.base / name / '.codex/skills/tool').exists())
+        record = json.loads((self.base / self.dev / '.local/state/skillstow/module.json').read_text())
+        self.assertEqual(record['project_skills'], {'proj': ['tool']})
+        self.assertNotIn('tool', record['skills'])
+        backups = self.base / self.dev / '.local/state/skillstow/backups'
+        before = set(backups.iterdir()); self.apply(self.dev)
+        self.assertEqual(before, set(backups.iterdir()))
+        module.unlink(proj / '.claude/skills'); shutil.rmtree(proj / '.agents')
+        self.apply(self.dev)
+        self.assertTrue((proj / '.claude/skills/tool/references/deep/note.md').exists())
+        del self.m['skills']['tool']; self.manifest(); self.apply(self.dev)
+        self.assertFalse((proj / '.agents/skills/tool').exists())
+        self.assertTrue((proj / '.agents/skills').is_dir())
+
+    def test_project_projection_link_becomes_local_directory(self):
+        proj = self.project(); external = self.base / 'external'
+        external.mkdir(); (external / 'SKILL.md').write_text('old projection')
+        entry = proj / '.agents/skills/tool'; entry.parent.mkdir(parents=True)
+        module.directory_link(external, entry)
+        self.apply(self.dev, True)
+        self.assertFalse(module.linked(entry))
+        self.assertIn('Project', (entry / 'SKILL.md').read_text())
+        self.assertEqual((external / 'SKILL.md').read_text(), 'old projection')
+
+    def test_project_path_and_declaration_are_checked(self):
+        self.project()
+        with self.assertRaisesRegex(ValueError, '项目目录不存在'): self.apply(self.dev, True)
+        for bad in ['relative/proj', '/tmp/../escape' if os.name != 'nt' else 'C:\\tmp\\..\\escape']:
+            self.m['devices'][self.dev]['projects'] = {'proj': bad}; self.manifest()
+            with self.assertRaises(ValueError): module.load(self.root)
+        self.project()
+        for entry in [{'source': 'projects/proj/tool', 'project': 'unknown'},
+                      {'source': 'projects/proj/tool', 'project': 'proj', 'devices': [self.dev]}]:
+            self.m['skills']['tool'] = entry; self.manifest()
+            with self.assertRaises(ValueError): module.load(self.root)
+
+    def test_project_move_is_destructive_and_cleans_old_location(self):
+        old = self.project(); old.mkdir(); self.apply(self.dev, True); self.commit()
+        new = self.base / 'moved'; new.mkdir()
+        self.m['devices'][self.dev]['projects'] = {'proj': str(new)}; self.manifest()
+        with patch.object(module, 'emit') as emit:
+            self.assertEqual(module.impact(self.repo, self.root, self.m), 3)
+            self.assertEqual(emit.call_args.args[0]['impact'][0]['devices'], [self.dev])
+        self.apply(self.dev)
+        self.assertFalse((old / '.agents/skills/tool').exists())
+        self.assertIn('Project', (new / '.claude/skills/tool/SKILL.md').read_text())
 
 
 if __name__ == '__main__':

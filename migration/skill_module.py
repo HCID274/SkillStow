@@ -34,6 +34,28 @@ def relative(value):
     return p
 
 
+def absolute(platform, value):
+    if not isinstance(value, str) or '..' in re.split(r'[\\/]', value):
+        return False
+    return bool(re.fullmatch(r'[A-Za-z]:[\\/].*', value)) if platform == 'windows' else value.startswith('/')
+
+
+def scope(m, entry):
+    """全局 Skill 对应设备列表；项目 Skill 对应登记了该项目的设备及其项目路径。"""
+    if 'project' in entry:
+        return {d: v['projects'][entry['project']] for d, v in m.get('devices', {}).items() if entry['project'] in v.get('projects', {})}
+    return dict.fromkeys(entry['devices'])
+
+
+def destination(active, projects, rel):
+    """项目 Skill 的收据键以 @项目 开头，落到该项目的 .agents/skills；其余落到 .codex/skills。"""
+    p = relative(rel)
+    if p.parts[0].startswith('@'):
+        base = Path(projects[p.parts[0][1:]]) / '.agents/skills'
+        return base / Path(*p.parts[1:]), base
+    return active / p, active
+
+
 def digest(p):
     return hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
 
@@ -47,14 +69,20 @@ def load(root):
             raise ValueError(f'非法设备：{name}')
         if not re.fullmatch(r'[a-zA-Z0-9_]+@[a-zA-Z0-9][a-zA-Z0-9.-]*', d['ssh']):
             raise ValueError(f'非法 SSH 目标：{name}')
+        projects = d.get('projects', {})
+        if not isinstance(projects, dict) or any(not re.fullmatch(r'[a-z0-9-]+', k) or not absolute(d['platform'], v) for k, v in projects.items()):
+            raise ValueError(f'非法项目路径：{name}')
         if 'global_rules' in d:
             rules = root / relative(d['global_rules'])
             if not rules.is_file() or rules.is_symlink() or not rules.resolve().is_relative_to(root.resolve()):
                 raise ValueError(f'非法设备规则：{name}')
     for name, entry in m['skills'].items():
-        if not re.fullmatch(r'[a-z0-9-]+', name) or set(entry) != {'source', 'devices'}:
+        if not re.fullmatch(r'[a-z0-9-]+', name) or set(entry) not in ({'source', 'devices'}, {'source', 'project'}):
             raise ValueError(f'非法 Skill：{name}')
-        if not entry['devices'] or set(entry['devices']) - m['devices'].keys():
+        if 'project' in entry:
+            if not scope(m, entry):
+                raise ValueError(f'项目未在任何设备登记：{name}')
+        elif not entry['devices'] or set(entry['devices']) - m['devices'].keys():
             raise ValueError(f'未知或空设备范围：{name}')
         source = root / relative(entry['source'])
         if source.is_symlink() or not source.resolve().is_relative_to(root.resolve()):
@@ -79,12 +107,12 @@ def files_for(root, m, device):
         raise ValueError(f'设备未登记：{device}')
     files = {}
     for name, e in m['skills'].items():
-        if device not in e['devices']:
+        if device not in scope(m, e):
             continue
-        source = root / e['source']
+        source, prefix = root / e['source'], Path('@' + e['project'], name) if 'project' in e else Path(name)
         for p in source.rglob('*'):
             if p.is_file():
-                files[(Path(name) / p.relative_to(source)).as_posix()] = p
+                files[(prefix / p.relative_to(source)).as_posix()] = p
     return files
 
 
@@ -215,13 +243,26 @@ def apply(root, m, device, home, adopt):
     old = json.loads(state.read_text(encoding='utf-8')) if state.exists() else None
     files = files_for(root, m, device)
     hashes = {rel: digest(p) for rel, p in files.items()}
+    used = {rel.split('/')[0][1:] for rel in files if rel.startswith('@')}
+    projects = {k: v for k, v in m['devices'][device].get('projects', {}).items() if k in used}
+    previous = (old or {}).get('projects', {})
+    for path in projects.values():
+        if not Path(path).is_dir():
+            raise ValueError(f'项目目录不存在：{path}')
+        if linked(Path(path) / '.agents') or linked(Path(path) / '.agents/skills'):
+            raise ValueError(f'项目 Skills 目录不能是链接：{path}')
+
+    def target(rel, owned=False):
+        # 已接管文件按上次记录的项目路径定位，项目迁移后才能清掉旧位置。
+        return destination(active, {**projects, **previous} if owned else projects, rel)
+
     if old:
         owned = old['files']
     elif adopt or not active.exists():
         owned = {}
     else:
         raise ValueError('首次接入需 --adopt；先核查原内容及备份范围')
-    selected_names = {Path(rel).parts[0] for rel in files}
+    selected_names = {Path(rel).parts[0] for rel in files if not rel.startswith('@')}
     if not old and adopt and active.exists():
         # 首次精简也纳入旧 runtime 清单外的个人 Skill；插件和本机秘密不接管。
         for d in active.iterdir():
@@ -230,8 +271,14 @@ def apply(root, m, device, home, adopt):
             for item in d.rglob('*'):
                 if item.is_file() and not linked(item) and item.name not in {'credentials.json', 'auth.json', 'secrets.json', 'tokens.json'} and not item.name.startswith('.env') and item.suffix not in {'.key', '.pem', '.db', '.sqlite'}:
                     owned.setdefault(item.relative_to(active).as_posix(), digest(item))
-    drift = [rel for rel, h in owned.items() if digest(active / relative(rel)) not in {h, hashes.get(rel)}]
-    drift += [rel for rel, h in hashes.items() if rel not in owned and (active / rel).exists() and digest(active / rel) != h]
+    # 项目 Skill 入口若仍是旧投影链接，只替换链接自身；其目标内容不算本地修改。
+    projection = {target(rel)[1] / rel.split('/')[1] for rel in files if rel.startswith('@')}
+    projection = {entry for entry in projection if linked(entry)}
+    # 项目目录里的未跟踪文件可能被 git clean 清掉；缺失时没有本地修改可保护，直接补回。
+    drift = [rel for rel, h in owned.items() if digest(target(rel, True)[0]) not in {h, hashes.get(rel)}
+             and not (rel.startswith('@') and not target(rel, True)[0].exists())]
+    drift += [rel for rel, h in hashes.items() if rel not in owned and target(rel)[0].exists() and digest(target(rel)[0]) != h
+              and not any(entry in target(rel)[0].parents for entry in projection)]
     if drift:
         raise ValueError('活动目录存在外部修改：' + ', '.join(drift))
     journal = Journal(state.parent / 'backups' / f'module-{time.time_ns()}')
@@ -242,13 +289,19 @@ def apply(root, m, device, home, adopt):
                 if linked(p):
                     journal.remove(p)
                     p.mkdir()
+        for entry in projection:
+            journal.remove(entry)
+            entry.mkdir(parents=True)
         for rel, source in files.items():
-            journal.write(active / rel, source.read_bytes(), source.stat().st_mode & 0o777)
-        for rel in owned.keys() - files.keys():
-            journal.remove(active / relative(rel))
+            journal.write(target(rel)[0], source.read_bytes(), source.stat().st_mode & 0o777)
+        for rel in owned:
+            path, stop = target(rel, True)
+            if rel in files and path == target(rel)[0]:
+                continue
+            journal.remove(path)
             # 资源或整个 Skill 退出本端后，逐级清掉留下的空目录。
-            parent = (active / relative(rel)).parent
-            while parent != active and parent.is_dir() and not linked(parent) and not any(parent.iterdir()):
+            parent = path.parent
+            while parent != stop and parent.is_dir() and not linked(parent) and not any(parent.iterdir()):
                 parent.rmdir()
                 parent = parent.parent
         # 首次接管只移除旧 Skill 入口链接；链接目标、凭据和插件目录保留在原地。
@@ -258,6 +311,8 @@ def apply(root, m, device, home, adopt):
                     journal.remove(p)
         for client in ('.agents', '.claude'):
             journal.link(home / client / 'skills', active)
+        for path in projects.values():
+            journal.link(Path(path) / '.claude/skills', Path(path) / '.agents/skills')
         global_source = active / 'decision-grade-reporting/references/global-collaboration.md'
         global_data = global_source.read_bytes()
         if 'global_rules' in m['devices'][device]:
@@ -271,20 +326,24 @@ def apply(root, m, device, home, adopt):
                 cleaned = without_telemetry_hooks(original)
                 if cleaned != original:
                     journal.write(p, (json.dumps(cleaned, ensure_ascii=False, indent=2) + '\n').encode())
-        if any(digest(active / rel) != h for rel, h in hashes.items()):
+        if any(digest(target(rel)[0]) != h for rel, h in hashes.items()):
             raise RuntimeError('落盘校验失败')
+        project_skills = {k: sorted({rel.split('/')[1] for rel in files if rel.startswith(f'@{k}/')}) for k in sorted(projects)}
+        summary = {'device': device, 'skills': sorted(selected_names), 'files': len(files)}
+        if project_skills:
+            summary['project_skills'] = project_skills
         commit = (git(root.parent, 'rev-parse', 'HEAD', optional=True) or '').strip()
-        if old and not journal.entries and old.get('commit') == commit and old['files'] == hashes:
-            emit({'device': device, 'skills': old['skills'], 'files': len(files), 'changed_paths': 0})
+        if old and not journal.entries and old.get('commit') == commit and old['files'] == hashes and previous == projects:
+            emit({**summary, 'changed_paths': 0})
             return
-        record = {'device': device, 'commit': commit,
-                  'files': hashes, 'skills': sorted({Path(rel).parts[0] for rel in files}),
+        record = {'device': device, 'commit': commit, 'files': hashes, 'skills': summary['skills'],
+                  'projects': projects, 'project_skills': project_skills,
                   'applied_at': int(time.time()), 'backup': str(journal.backup)}
         journal.write(state, (json.dumps(record, ensure_ascii=False, indent=2) + '\n').encode())
     except BaseException:
         journal.rollback()
         raise
-    emit({'device': device, 'skills': record['skills'], 'files': len(files), 'changed_paths': len(journal.entries), 'backup': str(journal.backup)})
+    emit({**summary, 'changed_paths': len(journal.entries), 'backup': str(journal.backup)})
 
 
 def impact(repo, root, m):
@@ -296,12 +355,15 @@ def impact(repo, root, m):
     result, removal = [], old_text is None
     for name in sorted(old['skills'].keys() | m['skills'].keys()):
         before, after = old['skills'].get(name), m['skills'].get(name)
+        placed_before = set(scope(old, before).items()) if before else set()
+        placed_after = set(scope(m, after).items()) if after else set()
         sources = [f"system/{e['source']}/" for e in (before, after) if e]
         touched = any(f.startswith(s) for f in changed if f for s in sources)
-        if before == after and not touched:
+        if before == after and placed_before == placed_after and not touched:
             continue
-        devices = sorted(set((before or {}).get('devices', [])) | set((after or {}).get('devices', [])))
-        destructive = bool(before and (not after or set(before['devices']) - set(after['devices']) or before['source'] != after['source']))
+        devices = sorted({d for d, _ in placed_before | placed_after})
+        # 设备退出或项目路径变更都会删除旧位置的文件，按删除/替换授权处理。
+        destructive = bool(before and (not after or placed_before - placed_after or before['source'] != after['source']))
         destructive |= any(f.startswith(s) for f in deleted if f for s in sources)
         removal |= destructive
         result.append({'skill': name, 'devices': devices, 'removal_or_replacement': destructive})
@@ -316,6 +378,8 @@ def read_receipt(home):
     if module.exists():
         d = json.loads(module.read_text(encoding='utf-8'))
         r.update({'skills': d['skills'], 'module_commit': d['commit']})
+        if d.get('project_skills'):
+            r['project_skills'] = d['project_skills']
     return r
 
 
@@ -368,7 +432,8 @@ def main():
         emit({'valid': True, 'skills': len(m['skills']), 'devices': list(m['devices'])})
     elif a.command == 'locate':
         e = m['skills'][a.skill]
-        emit({'skill': a.skill, 'source': str(root / e['source']), 'devices': e['devices'], 'manifest': str(root / 'manifest.json')})
+        emit({'skill': a.skill, 'source': str(root / e['source']), 'devices': sorted(scope(m, e)), **({'project': e['project']} if 'project' in e else {}),
+              'manifest': str(root / 'manifest.json')})
     elif a.command == 'impact':
         return impact(a.repo, root, m)
     elif a.command == 'fleet':
