@@ -1,46 +1,36 @@
-# 四端统一模块交付
+# 单一适配器路径与残留清理交付
 
-日期：2026-09-09。此记录替代 2026-09-06 的三设备阶段；旧记录保留在 Git 历史。
+日期：2026-09-23。此记录替代 2026-09-09 的四端统一交付；旧记录保留在 Git 历史。
 
-## 结果与归属
+## 程序
 
-私人内容仓 HCID274/skills 只登记一个 personal-skill-system 模块。system/manifest.json 明确源位置与设备范围；四端持有完整 checkout，共享 Skill 的规范源只有一份，设备专属源也在同一仓。客户端只安装适用内容。
+CLI 0.3.0 删除 skillstow.toml 的包/工具/variant 投影层（plan.rs、link.rs 及配置模型）。Rust 由 1052 行降到 529 行，本机配置只剩 repo、device、module_adapter。校验、影响分析和应用统一经本机适配器，不再有 before_publish/after_apply 钩子。后台同步在无本地修改、无远端更新且已应用时静默退出：HomeServer 的 sync.log 原来每分钟约 43 行，改后 130 秒内零增长。
 
-共同规则明确：对整个体系优先删减，必要时再补；定位、分发、校验和状态查询优先用程序；影响目标、范围、验收、授权或关键取舍的歧义先复述对齐。规则从同一源生成 Codex AGENTS.md，并由 Claude CLAUDE.md 导入本机应用后的同一正文。
+适配器同时修复并精简：
+- Skill 或资源退出本端时清掉空目录。此前留下的空目录，正是各端客户端目录里空壳的来源。
+- 移除遥测命令后，一并清掉变空的 Hook 分组和遥测说明。
+- apply 前核对本机平台。
+- 全新设备无需 --adopt。
+- 删除旧 runtime 迁移分支。
 
-| 源范围 | Skills | 应用设备 |
-| --- | --- | --- |
-| 单一共享源 | engineering、decision-grade-reporting、personal-tools、skillstow-maintain | 四端 |
-| Mac 专属源 | mac-ops | Mac |
-| Windows 专属源 | windows-automation | Windows 原生账户 |
-| HomeServer 专属源 | host-ops | HomeServer |
-| 深圳专属源 | panclilocal | Shenzhen |
+验证：
+- Windows 原生：cargo fmt/clippy 通过；e2e 14 项（跳过 1 项符号链接权限）、单元 13 项（跳过 1 项 Unix 模式）通过。
+- Linux 实机（HomeServer，二进制在 Windows 以 rust-lld 交叉编译为静态 musl）：e2e 14 项、单元 13 项全部通过，没有跳过。
 
-最终共 8 个个人 Skill 源，每端 5 个、7 个内容文件。Mac 原生 Codex 枚举的个人条目由 45 降为 5；这不是总插件数或实测 Token 数。退出旧树、LRU、SQLite 遥测和原调用 Hook，保留凭据、宿主 .system 与第三方插件。
+## 内容
 
-## 内容发布与逐端应用
+内容提交 e55daa9 由 Windows 经 edit begin/finish 发布：engineering 的维护 Hook 退出 SkillStow 应用链（删除 bind_sync 与 after-apply），改为每端一次性 install；3 个文件，新增 5 行、删除 89 行。HomeServer 与 Shenzhen 由各自后台任务自然接收，未手工触发。
 
-内容 main 最终提交 aa5ce833a8b21d85a9d955aa248a6ac8d99af904 已 push。相对改动前 eea566702b0849eba234b6a5ac0a3eb69b8fc2e5，981 文件变更，新增 248 行、删除 101310 行；统计包含旧多设备副本、脚本与历史资源，不能等同模型上下文删减。最终内容仓 15 个跟踪文件，其中模块 12 个。
+## 逐端状态
 
-真实双向链路逐一验证：Mac 发布 3da55e7、HomeServer 发布 4ca55b7、Shenzhen 发布 7ff578d、Windows 发布 e4b5d83，每次其他三端均收到对应内容。最后 Mac 删除临时验证文件，另外三端由各自后台任务接收最终版本，未手工触发接收。
-
-| 设备 | 程序 | 最终收据 | 后台实机证据 |
+| 设备 | 程序 | 收据 | 清理 |
 | --- | --- | --- | --- |
-| Mac | 0.2.0 | aa5ce83，applied=true | launchd，60 秒，最近退出 0 |
-| Windows | 原生 0.2.0 | aa5ce83，applied=true | SkillStowSync 计划任务，60 秒，LastTaskResult=0 |
-| HomeServer | Linux 0.2.0 | aa5ce83，applied=true | 用户 crontab，60 秒；自动接收最终提交 |
-| Shenzhen | Linux 0.2.0 | aa5ce83，applied=true | systemd 用户 timer，60 秒；服务后续执行退出 0 |
+| Windows | 0.3.0 | e55daa9，applied=true；计划任务最近返回 0 | 16 个空 Skill 目录、skills.old、旧 runtime 脚本、迁移快照、构建目录、packages 链接、sync.json |
+| HomeServer | 0.3.0 | e55daa9，applied=true | 7 个空目录、.projections/.catalog/.runtime、旧脚本、构建目录、旧状态、17MB 日志、遥测 Hook 空壳、悬空 glm-agent 链接、packages 链接、sync.json |
+| Shenzhen | 0.3.0 | e55daa9，applied=true | 6 个空目录、.projections/.catalog/.runtime（含退役 luna-vision-worker 凭据，已随备份保留）、旧脚本、构建目录、旧状态、packages 链接；遥测 Hook 空壳由新适配器自动清除 |
+| Mac | 0.2.0 | 未查询：Mac 不接受 SSH | 见 HANDOFF 待办一 |
+| plasma-fes | 0.2.0 | 离线 | 见 HANDOFF 待办二 |
 
-四端工作区干净、无编辑标记、临时验证文件不存在；逐文件 SHA-256 与模块状态一致，全局正文一致。已安装适配器 SHA-256 均为 4f0d34d5d6cd5984a50fa1d32fbbaf19bd165dbb7efd37b32d9b0cce0eafa1ea。Mac 的 fleet 实查四端均 reachable=true，收据为同一最终提交。
+删除前各端都打包到 ~/.local/state/skillstow/backups/cleanup-20260923*.tar.gz；Shenzhen 的包权限为 600。
 
-Windows 已配置本机仓库专用可写 GitHub deploy key；秘密未进入仓库。初次检出产生的纯换行差异保留于本机备份后重新检出，后续统一 LF。首次接管后四端移除日常 --adopt，避免重复迁移。深圳收据查询使用已验证的原 SSH 公网端点；其 Tailscale 22 端口此次不可达，不影响设备各自通过 GitHub 同步。
-
-## 验证和边界
-
-- 每个平台执行真实 Git 集成测试 17 项及模块测试 12 项。Mac、HomeServer、Shenzhen 全部通过；Windows 27 项通过，2 项因 Unix 文件模式或符号链接权限跳过，其 junction、资源、迁移与发布链路通过。
-- cargo fmt --check、cargo clippy -- -D warnings、git diff --check 通过；8 个入口通过 skill-creator 格式校验。Mac 最后复核明确使用已安装的 release 0.2.0；遗留旧 debug 二进制不作为候选版本。
-- 四端启动新的 Codex app-server，通过原生 skills/list 枚举到准确 5 个个人 Skill，错误为 0。HomeServer 与 Windows 的 Claude 原生控制协议也返回相同 5 个个人命令。验证未发送模型任务。
-- Mac、Shenzhen 未找到 Claude CLI，只验证共享目录和全局导入落盘；不能声称这两端 Claude 已实际加载。Windows 范围为原生账户，不包括 WSL。
-- 文件已同步不会清空已有会话上下文；新任务读取新规则，已有任务需要实际重读。旧内容可从 Git 历史或本机逐文件迁移备份恢复。
-
-程序源码与内容分别发布。程序开发分支为 codex/unified-skill-module，运行版本已独立部署四端；代码合入主分支以对应 PR 状态为准，不以内容 main 推断代码已合并。
+客户端发现：Windows 与 HomeServer 用 tests/client_discovery.py 启动 Codex app-server，skills/list 分别准确枚举 9 个与 8 个个人 Skill，错误为 0；没有发送模型任务。已有会话要重新读取才算加载新内容。
