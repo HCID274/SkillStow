@@ -1,4 +1,5 @@
-"""真实 Git 双 checkout 验收；所有数据和工具目录隔离在临时目录。"""
+"""真实 Git 双 checkout 与模块适配器验收；仓库、设备 home 和状态都隔离在临时目录。"""
+import json
 import os
 import pathlib
 import subprocess
@@ -6,19 +7,31 @@ import sys
 import tempfile
 import unittest
 
-BIN = pathlib.Path(os.environ.get('SKILLSTOW_BIN', pathlib.Path(__file__).resolve().parents[1] / 'target/debug/skillstow')).resolve()
+REPO = pathlib.Path(__file__).resolve().parents[1]
+BIN = pathlib.Path(os.environ.get('SKILLSTOW_BIN', REPO / 'target/debug/skillstow')).resolve()
+ADAPTER = REPO / 'migration/skill_module.py'
+PLATFORM = {'darwin': 'macos', 'win32': 'windows'}.get(sys.platform, sys.platform)
 
-def run(*args, cwd=None, code=0):
-    p = subprocess.run([str(a) for a in args], cwd=cwd, text=True, capture_output=True, stdin=subprocess.DEVNULL, timeout=40)
+
+def run(*args, code=0, env=None):
+    p = subprocess.run([str(a) for a in args], text=True, encoding='utf-8', capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=60, env=env)
     assert p.returncode == code, (args, p.returncode, p.stdout, p.stderr)
     return p.stdout
+
 
 def git(repo, *args):
     return run('git', '-C', repo, *args).strip()
 
+
 def write(p, text):
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(text)
+    p.write_text(text, encoding='utf-8')
+
+
+def skill(name, body='Initial'):
+    return f'---\nname: {name}\ndescription: Test\n---\n{body}\n'
+
 
 class SyncTest(unittest.TestCase):
     def setUp(self):
@@ -26,153 +39,183 @@ class SyncTest(unittest.TestCase):
         self.root = pathlib.Path(self.tmp.name).resolve()
         self.origin = self.root / 'origin.git'
         run('git', 'init', '--bare', '--initial-branch=main', self.origin)
-        self.a = self.root/'a'; self.b = self.root/'b'
+        self.a, self.b = self.root / 'a', self.root / 'b'
         run('git', 'clone', self.origin, self.a)
-        for k,v in [('user.name', 'Test'), ('user.email','test@example.invalid')]: git(self.a, 'config', k, v)
-        self.platform = {'darwin':'macos', 'linux':'linux', 'win32':'windows'}[sys.platform]
-        self.manifest = f'''[tools.codex]
-path = "{self.root.as_posix()}/unused"
-[skills.review.variants.universal]
-path = "skills/review/common"
-[skills.review.variants.b]
-path = "skills/review/b"
-device = "b"
-[devices.a]
-platform = "{self.platform}"
-enabled = ["review"]
-[devices.b]
-platform = "{self.platform}"
-enabled = ["review"]
-'''
-        write(self.a/'skillstow.toml', self.manifest)
-        for variant in ['common','b']:
-            write(self.a/f'skills/review/{variant}/SKILL.md', '---\nname: review\ndescription: Test\n---\nInitial\n')
-            write(self.a/f'skills/review/{variant}/references/check.md', f'{variant} resource\n')
-        git(self.a,'add','-A'); git(self.a,'commit','-m','initial'); git(self.a,'push','-u','origin','main')
-        run('git','clone',self.origin,self.b)
-        for k,v in [('user.name','Test'),('user.email','test@example.invalid')]: git(self.b,'config',k,v)
+        self.identity(self.a)
+        self.manifest = {'version': 1, 'devices': {
+            'a': {'platform': PLATFORM, 'ssh': 'test@127.0.0.1'},
+            'b': {'platform': PLATFORM, 'ssh': 'test@127.0.0.1'}}, 'skills': {
+            'decision-grade-reporting': {'source': 'shared/decision-grade-reporting', 'devices': ['a', 'b']},
+            'review': {'source': 'shared/review', 'devices': ['a', 'b']},
+            'special': {'source': 'devices/b/special', 'devices': ['b']}}}
+        self.write_manifest(self.a)
+        for name, source in [(n, e['source']) for n, e in self.manifest['skills'].items()]:
+            write(self.a / 'system' / source / 'SKILL.md', skill(name))
+        write(self.a / 'system/shared/decision-grade-reporting/references/global-collaboration.md', 'Global\n')
+        write(self.a / 'system/shared/review/references/check.md', 'common resource\n')
+        git(self.a, 'add', '-A'); git(self.a, 'commit', '-m', 'initial'); git(self.a, 'push', '-u', 'origin', 'main')
+        run('git', 'clone', self.origin, self.b)
+        self.identity(self.b)
         self.configs = {}
-        for name,repo in [('a',self.a),('b',self.b)]:
-            cfg = self.root/name.replace(name,'state-'+name)/'config.toml'
-            write(cfg, f'repo = "{repo.as_posix()}"\ndevice = "{name}"\ntools = ["codex"]\n[overrides]\ncodex = "{self.root.as_posix()}/tool-{name}"\n')
+        for name, repo in [('a', self.a), ('b', self.b)]:
+            cfg = self.root / f'state-{name}/config.toml'
+            adapter = json.dumps([sys.executable, '-X', 'utf8', str(ADAPTER)])
+            write(cfg, f'repo = {json.dumps(str(repo))}\ndevice = "{name}"\nmodule_adapter = {adapter}\n')
             self.configs[name] = cfg
             self.cli(name, 'sync')
-    def tearDown(self): self.tmp.cleanup()
-    def cli(self, name, *args, code=0): return run(BIN, '--config', self.configs[name], *args, code=code)
-    def test_complete_resources_variants_and_idempotence(self):
-        self.assertEqual((self.root/'tool-a/review/references/check.md').read_text(),'common resource\n')
-        self.assertEqual((self.root/'tool-b/review/references/check.md').read_text(),'b resource\n')
-        head = git(self.a,'rev-parse','HEAD')
-        self.cli('a','sync'); self.cli('a','status')
-        self.assertEqual(head,git(self.a,'rev-parse','HEAD'))
-    def test_edit_isolation_background_and_cross_device_maintenance(self):
-        self.cli('a','edit','begin')
-        write(self.a/'skills/review/common/references/check.md','edited common\n')
-        write(self.a/'skills/review/b/references/check.md','maintained b from a\n')
-        self.cli('a','sync','--background')
-        self.assertEqual((self.root/'tool-a/review/references/check.md').read_text(),'common resource\n')
-        self.cli('a','sync',code=2)
-        self.cli('a','edit','finish')
-        self.cli('b','sync')
-        self.assertEqual((self.root/'tool-b/review/references/check.md').read_text(),'maintained b from a\n')
+
+    def tearDown(self):
+        # Windows junction 不能交给递归目录清理猜测；先移除客户端入口链接自身。
+        sys.path.insert(0, str(ADAPTER.parent))
+        import skill_module
+        for name in ['a', 'b']:
+            for client in ['.agents', '.claude']:
+                p = self.home(name) / client / 'skills'
+                if skill_module.linked(p):
+                    skill_module.unlink(p)
+        self.tmp.cleanup()
+
+    def identity(self, repo):
+        for k, v in [('user.name', 'Test'), ('user.email', 'test@example.invalid')]:
+            git(repo, 'config', k, v)
+
+    def write_manifest(self, repo):
+        write(repo / 'system/manifest.json', json.dumps(self.manifest, indent=2))
+
+    def home(self, name):
+        return self.root / f'home-{name}'
+
+    def active(self, name, rel):
+        return self.home(name) / '.codex/skills' / rel
+
+    def cli(self, name, *args, code=0):
+        home = str(self.home(name))
+        env = {**os.environ, 'HOME': home, 'USERPROFILE': home}
+        return run(BIN, '--config', self.configs[name], *args, code=code, env=env)
+
+    def receipt(self, name):
+        return (self.configs[name].parent / 'receipt.toml').read_text()
+
+    def test_scope_resources_and_idempotence(self):
+        self.assertEqual(self.active('a', 'review/references/check.md').read_text(), 'common resource\n')
+        self.assertFalse(self.active('a', 'special').exists())
+        self.assertTrue((self.home('b') / '.claude/skills/special/SKILL.md').is_file())
+        self.assertEqual((self.home('a') / '.codex/AGENTS.md').read_text(), 'Global\n')
+        head = git(self.a, 'rev-parse', 'HEAD')
+        self.cli('a', 'sync'); self.cli('a', 'status')
+        self.assertEqual(head, git(self.a, 'rev-parse', 'HEAD'))
+
+    def test_background_noop_is_silent_and_skips_adapter(self):
+        before = self.receipt('a')
+        self.assertEqual(self.cli('a', 'sync', '--background'), '')
+        self.assertEqual(before, self.receipt('a'))
+
+    def test_background_receives_remote_update(self):
+        write(self.a / 'system/shared/review/references/check.md', 'updated from a\n')
+        self.cli('a', 'sync')
+        self.assertIn('application=applied', self.cli('b', 'sync', '--background'))
+        self.assertEqual(self.active('b', 'review/references/check.md').read_text(), 'updated from a\n')
+        self.cli('b', 'status')
+
+    def test_edit_isolation_and_cross_device_maintenance(self):
+        self.cli('a', 'edit', 'begin')
+        write(self.a / 'system/devices/b/special/references/note.md', 'maintained b from a\n')
+        self.assertIn('editing', self.cli('a', 'sync', '--background'))
+        self.cli('a', 'sync', code=2)
+        self.cli('a', 'edit', 'finish')
+        self.cli('b', 'sync')
+        self.assertEqual(self.active('b', 'special/references/note.md').read_text(), 'maintained b from a\n')
+        self.assertFalse(self.active('a', 'special').exists())
+
     def test_concurrent_distinct_changes_merge(self):
-        write(self.a/'skills/review/common/references/a.md','from a')
-        write(self.b/'skills/review/b/references/b.md','from b')
-        self.cli('a','sync'); self.cli('b','sync'); self.cli('a','sync')
-        self.assertTrue((self.a/'skills/review/b/references/b.md').exists())
-        self.assertTrue((self.b/'skills/review/common/references/a.md').exists())
+        write(self.a / 'system/shared/review/references/a.md', 'from a')
+        write(self.b / 'system/devices/b/special/references/b.md', 'from b')
+        self.cli('a', 'sync'); self.cli('b', 'sync'); self.cli('a', 'sync')
+        self.assertTrue((self.a / 'system/devices/b/special/references/b.md').exists())
+        self.assertTrue(self.active('b', 'review/references/a.md').exists())
+
     def test_conflict_keeps_edit_and_published_content(self):
-        self.cli('b','edit','begin')
-        write(self.a/'skills/review/common/SKILL.md','version A\n')
-        write(self.b/'skills/review/common/SKILL.md','version B\n')
-        self.cli('a','sync')
-        self.cli('b','edit','finish',code=2)
-        self.assertTrue((self.configs['b'].parent/'editing').exists())
-        self.assertIn('Initial',(self.configs['b'].parent/'published/skills/review/common/SKILL.md').read_text())
-        write(self.b/'skills/review/common/SKILL.md','merged A and B\n')
-        git(self.b,'add','-A'); git(self.b,'-c','core.editor=true','rebase','--continue')
-        self.cli('b','edit','finish')
-        self.assertFalse((self.configs['b'].parent/'editing').exists())
+        self.cli('b', 'edit', 'begin')
+        write(self.a / 'system/shared/review/references/check.md', 'version A\n')
+        write(self.b / 'system/shared/review/references/check.md', 'version B\n')
+        self.cli('a', 'sync')
+        self.cli('b', 'edit', 'finish', code=2)
+        self.assertTrue((self.configs['b'].parent / 'editing').exists())
+        self.assertEqual(self.active('b', 'review/references/check.md').read_text(), 'common resource\n')
+        write(self.b / 'system/shared/review/references/check.md', 'merged A and B\n')
+        git(self.b, 'add', '-A'); git(self.b, '-c', 'core.editor=true', 'rebase', '--continue')
+        self.cli('b', 'edit', 'finish')
+        self.assertFalse((self.configs['b'].parent / 'editing').exists())
+        self.assertEqual(self.active('b', 'review/references/check.md').read_text(), 'merged A and B\n')
+
     def test_receiver_does_not_need_a_working_push_endpoint(self):
-        git(self.a,'config','remote.origin.pushurl',str(self.root/'no-push-endpoint.git'))
-        self.cli('a','sync')
-        self.cli('a','status')
+        git(self.a, 'config', 'remote.origin.pushurl', str(self.root / 'no-push-endpoint.git'))
+        self.cli('a', 'sync')
+        self.cli('a', 'status')
 
     def test_unreachable_origin_preserves_edit_and_recovers(self):
-        self.cli('a','edit','begin')
-        write(self.a/'skills/review/common/references/recovered.md','pending offline update')
-        before=git(self.a,'rev-parse','HEAD')
-        git(self.a,'remote','set-url','origin',str(self.root/'unreachable.git'))
-        self.cli('a','edit','finish',code=2)
-        self.assertEqual(before,git(self.a,'rev-parse','HEAD'))
-        self.assertTrue((self.configs['a'].parent/'editing').exists())
-        git(self.a,'remote','set-url','origin',str(self.origin))
-        self.cli('a','edit','finish');self.cli('b','sync')
-        self.assertEqual((self.b/'skills/review/common/references/recovered.md').read_text(),'pending offline update')
+        self.cli('a', 'edit', 'begin')
+        write(self.a / 'system/shared/review/references/recovered.md', 'pending offline update')
+        before = git(self.a, 'rev-parse', 'HEAD')
+        git(self.a, 'remote', 'set-url', 'origin', str(self.root / 'unreachable.git'))
+        self.cli('a', 'edit', 'finish', code=2)
+        self.assertEqual(before, git(self.a, 'rev-parse', 'HEAD'))
+        self.assertTrue((self.configs['a'].parent / 'editing').exists())
+        git(self.a, 'remote', 'set-url', 'origin', str(self.origin))
+        self.cli('a', 'edit', 'finish'); self.cli('b', 'sync')
+        self.assertEqual(self.active('b', 'review/references/recovered.md').read_text(), 'pending offline update')
 
-    def test_foreign_files_survive(self):
-        foreign = self.root/'tool-a/foreign/SKILL.md'; write(foreign,'user owned')
-        self.cli('a','sync',code=1)
-        self.assertEqual(foreign.read_text(),'user owned')
-        self.cli('a','status',code=1)
-    def test_two_device_variants_are_ambiguous_even_with_platform(self):
-        before=git(self.origin,'rev-parse','main')
-        write(self.a/'skills/review/other/SKILL.md','---\nname: review\ndescription: Test\n---\n')
-        write(self.a/'skillstow.toml',self.manifest+f'\n[skills.review.variants.other]\npath = "skills/review/other"\ndevice = "b"\nplatform = "{self.platform}"\n')
-        self.cli('a','sync','--approve-removals',code=2)
-        self.assertEqual(before,git(self.origin,'rev-parse','main'))
-    def test_invalid_candidate_never_published(self):
-        before = git(self.origin,'rev-parse','main')
-        write(self.a/'skillstow.toml', self.manifest.replace('enabled = ["review"]','enabled = ["missing"]',1))
-        self.cli('a','sync',code=2)
-        self.assertEqual(before,git(self.origin,'rev-parse','main'))
-    def test_symlink_inside_package_rejected(self):
-        if os.name == 'nt': self.skipTest('requires symlink privilege')
-        (self.a/'skills/review/common/leak').symlink_to(self.a/'skillstow.toml')
-        self.cli('a','sync',code=2)
-    def test_removing_managed_link_does_not_remove_package(self):
-        write(self.a/'skillstow.toml', self.manifest.replace('enabled = ["review"]','enabled = []',1))
-        self.cli('a','sync',code=2)
-        self.cli('a','sync','--approve-removals')
-        self.assertFalse((self.root/'tool-a/review').exists())
-        self.assertTrue((self.configs['a'].parent/'published/skills/review/common/SKILL.md').exists())
     def test_background_waits_for_stability(self):
-        before=git(self.a,'rev-parse','HEAD')
-        write(self.a/'skills/review/common/references/new.md','new')
-        self.cli('a','sync','--background')
-        self.assertEqual(before,git(self.a,'rev-parse','HEAD'))
-        stamp=self.configs['a'].parent/'quiet'
-        fingerprint=stamp.read_text().split()[0]
-        stamp.write_text(f'{fingerprint} 0')
-        self.cli('a','sync','--background')
-        self.assertNotEqual(before,git(self.a,'rev-parse','HEAD'))
-    def test_ignored_resource_blocks_publication(self):
-        before=git(self.origin,'rev-parse','main')
-        write(self.a/'.gitignore','secret-resource.txt\n')
-        write(self.a/'skills/review/common/secret-resource.txt','required content')
-        self.cli('a','sync',code=2)
-        self.assertEqual(before,git(self.origin,'rev-parse','main'))
-    def test_prepublication_hook_blocks_invalid_runtime(self):
-        before=git(self.origin,'rev-parse','main')
-        cfg=self.configs['a']
-        cfg.write_text(cfg.read_text().replace('[overrides]',f'before_publish = ["{pathlib.Path(sys.executable).as_posix()}", "-c", "raise SystemExit(1)"]\n[overrides]'))
-        write(self.a/'skills/review/common/references/new.md','candidate')
-        self.cli('a','sync',code=2)
-        self.assertEqual(before,git(self.origin,'rev-parse','main'))
-    def test_adapter_failure_not_reported_applied(self):
-        cfg=self.configs['a']
-        text=cfg.read_text().replace('[overrides]',f'after_apply = ["{pathlib.Path(sys.executable).as_posix()}", "-c", "raise SystemExit(1)"]\n[overrides]')
-        cfg.write_text(text)
-        self.cli('a','sync',code=2)
-        self.cli('a','status',code=1)
-    def test_invalid_variant_and_dependency_stop_publication(self):
-        before=git(self.origin,'rev-parse','main')
-        write(self.a/'skillstow.toml',self.manifest.replace('[skills.review.variants.universal]','[skills.review]\nrequires = ["missing"]\n[skills.review.variants.universal]'))
-        self.cli('a','sync',code=2)
-        self.assertEqual(before,git(self.origin,'rev-parse','main'))
-    def test_dirty_published_tree_is_preserved(self):
-        write(self.root/'tool-a/review/references/check.md','external edit')
-        self.cli('a','sync',code=2)
-        self.assertEqual((self.root/'tool-a/review/references/check.md').read_text(),'external edit')
+        before = git(self.a, 'rev-parse', 'HEAD')
+        write(self.a / 'system/shared/review/references/new.md', 'new')
+        self.cli('a', 'sync', '--background')
+        self.assertEqual(before, git(self.a, 'rev-parse', 'HEAD'))
+        stamp = self.configs['a'].parent / 'quiet'
+        stamp.write_text(f'{stamp.read_text().split()[0]} 0')
+        self.cli('a', 'sync', '--background')
+        self.assertNotEqual(before, git(self.a, 'rev-parse', 'HEAD'))
 
-if __name__ == '__main__': unittest.main(verbosity=2)
+    def test_invalid_candidate_never_published(self):
+        before = git(self.origin, 'rev-parse', 'main')
+        self.manifest['skills']['review']['devices'] = ['a', 'missing']
+        self.write_manifest(self.a)
+        self.cli('a', 'sync', code=2)
+        self.assertEqual(before, git(self.origin, 'rev-parse', 'main'))
+
+    def test_symlink_inside_package_rejected(self):
+        if os.name == 'nt':
+            self.skipTest('requires symlink privilege')
+        (self.a / 'system/shared/review/leak').symlink_to(self.a / 'system/manifest.json')
+        self.cli('a', 'sync', code=2)
+
+    def test_scope_removal_requires_approval(self):
+        before = git(self.origin, 'rev-parse', 'main')
+        self.manifest['skills']['review']['devices'] = ['a']
+        self.write_manifest(self.a)
+        self.cli('a', 'sync', code=2)
+        self.assertEqual(before, git(self.origin, 'rev-parse', 'main'))
+        self.cli('a', 'sync', '--approve-removals')
+        self.cli('b', 'sync')
+        self.assertFalse(self.active('b', 'review').exists())
+        self.assertTrue(self.active('a', 'review/SKILL.md').exists())
+
+    def test_external_drift_blocks_application_and_status(self):
+        drifted = self.active('a', 'review/references/check.md')
+        drifted.write_text('external edit')
+        write(self.b / 'system/shared/review/references/check.md', 'from b\n')
+        self.cli('b', 'sync')
+        self.cli('a', 'sync', code=2)
+        self.assertEqual(drifted.read_text(), 'external edit')
+        self.assertIn('applied = false', self.receipt('a'))
+        self.cli('a', 'status', code=1)
+
+    def test_foreign_skill_survives(self):
+        foreign = self.active('a', 'foreign/SKILL.md')
+        write(foreign, 'user owned')
+        write(self.b / 'system/shared/review/references/check.md', 'from b\n')
+        self.cli('b', 'sync'); self.cli('a', 'sync')
+        self.assertEqual(foreign.read_text(), 'user owned')
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)

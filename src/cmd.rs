@@ -1,19 +1,16 @@
 use crate::{
     Edit,
-    config::{self, Local, Manifest},
-    link::{self, State},
-    plan::{self, Action},
+    config::{self, Local},
     repo,
 };
 use anyhow::{Context, Result, ensure};
 use std::{
-    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-// 配置目录隔离各设备状态；Git worktree 保存已发布内容，编辑不会改变工具正在读取的包。
+// 配置目录隔离各设备状态；Git worktree 保存已发布内容，编辑不会改变客户端正在读取的包。
 fn state(p: &Path, name: &str) -> Result<PathBuf> {
     Ok(p.parent().context("配置路径缺少父目录")?.join(name))
 }
@@ -33,67 +30,31 @@ fn lock(p: &Path) -> Result<Lock> {
         .context("同步已在运行；若上次进程被强制结束，确认它已退出后移除 sync.lock")?;
     Ok(Lock(path))
 }
-fn manifest(root: &Path) -> Result<Manifest> {
-    let m: Manifest = config::read(&root.join("skillstow.toml"))?;
-    m.validate(root)?;
-    Ok(m)
+fn receipt(c: &Local, sha: &str, applied: bool) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    format!(
+        "device = {:?}\ncommit = {sha:?}\napplied = {applied}\nchecked_at = {now}\n",
+        c.device
+    )
 }
-fn validate_local(c: &Local, m: &Manifest) -> Result<()> {
-    let d = m.devices.get(&c.device).context("本设备未登记在共享清单")?;
-    ensure!(
-        d.platform == std::env::consts::OS,
-        "本设备平台与清单不符：{}",
-        d.platform
-    );
-    for t in &c.tools {
-        ensure!(m.tools.contains_key(t), "未知工具：{t}");
-    }
-    for t in c.overrides.keys() {
-        ensure!(c.tools.contains(t), "override 工具未启用：{t}");
-    }
-    Ok(())
+// 收据、发布目录和提交三者一致才算本机已应用该版本。
+fn applied(p: &Path, sha: &str) -> Result<bool> {
+    let active = state(p, "published")?;
+    let receipt: toml::Value = fs::read_to_string(state(p, "receipt.toml")?)
+        .ok()
+        .and_then(|text| toml::from_str(&text).ok())
+        .unwrap_or(toml::Value::Table(Default::default()));
+    Ok(
+        receipt.get("applied").and_then(toml::Value::as_bool) == Some(true)
+            && receipt.get("commit").and_then(toml::Value::as_str) == Some(sha)
+            && active.exists()
+            && repo::git(&active, &["rev-parse", "HEAD"])? == sha
+            && !repo::dirty(&active)?,
+    )
 }
-fn actions(c: &Local, m: &Manifest, active: &Path) -> Result<Vec<Action>> {
-    let selected = m.resolve(&c.device)?;
-    let mut current = BTreeMap::new();
-    let mut desired = BTreeMap::new();
-    let mut blocked = Vec::new();
-    for tool in &c.tools {
-        let dir = config::expand(c.overrides.get(tool).unwrap_or(&m.tools[tool].path))?;
-        ensure!(dir.is_absolute(), "工具路径必须是绝对路径或 ~/ 路径");
-        ensure!(
-            !dir.starts_with(&c.repo)
-                && !c.repo.starts_with(&dir)
-                && !dir.starts_with(active)
-                && !active.starts_with(&dir),
-            "工具目录不能与维护仓或发布目录重叠"
-        );
-        match link::classify(&dir)? {
-            State::Missing => {}
-            State::Directory => {
-                for e in fs::read_dir(&dir)? {
-                    let e = e?;
-                    // 宿主 .system、插件等隐藏目录不归个人 Skills 同步管理。
-                    if !e.file_name().to_string_lossy().starts_with('.') {
-                        current.insert(e.path(), link::classify(&e.path())?);
-                    }
-                }
-            }
-            _ => {
-                blocked.push(Action::Blocked(dir));
-                continue;
-            }
-        }
-        for (name, path) in &selected {
-            if !m.exclude.get(name).is_some_and(|ts| ts.contains(tool)) {
-                desired.insert(dir.join(name), active.join(path));
-            }
-        }
-    }
-    blocked.extend(plan::compare(active, &current, &desired));
-    Ok(blocked)
-}
-fn activate(p: &Path, c: &Local, sha: &str) -> Result<usize> {
+fn activate(p: &Path, c: &Local, sha: &str) -> Result<()> {
     let active = state(p, "published")?;
     if active.exists() {
         ensure!(
@@ -121,112 +82,66 @@ fn activate(p: &Path, c: &Local, sha: &str) -> Result<usize> {
             &["worktree", "add", "--detach", repo::path(&active)?, sha],
         )?;
     }
-    let m = manifest(&active)?;
-    let mut published = config::load(p)?;
-    published.repo = active.clone();
-    let plan = actions(&published, &m, &active)?;
-    let mut pending = String::from("# SkillStow 待处理\n\n");
-    let mut count = 0;
-    for a in plan {
-        match a {
-            Action::Create(dest, target) => {
-                fs::create_dir_all(dest.parent().unwrap())?;
-                link::create(&target, &dest)?;
-            }
-            Action::Remove(dest) => link::remove(&dest)?,
-            Action::Blocked(dest) => {
-                count += 1;
-                pending.push_str(&format!("- 保留未受管路径，尚未应用：{}\n", dest.display()));
-            }
-        }
-    }
-    fs::write(state(p, "pending.md")?, pending)?;
-    fs::write(
-        state(p, "receipt.toml")?,
-        format!("commit = {sha:?}\napplied = false\n"),
-    )?;
-    if count == 0 {
-        hook(&c.after_apply, &active).context("提交已发布，本机应用尚未完成")?;
-    }
-    let receipt = format!(
-        "device = {:?}\ncommit = {:?}\napplied = {}\nchecked_at = {}\n",
-        c.device,
-        sha,
-        count == 0,
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs()
+    fs::write(state(p, "receipt.toml")?, receipt(c, sha, false))?;
+    ensure!(
+        module_run(c, &active, &["apply", "--device", &c.device])? == 0,
+        "提交已发布，本机应用尚未完成"
     );
-    fs::write(state(p, "receipt.toml")?, receipt)?;
+    fs::write(state(p, "receipt.toml")?, receipt(c, sha, true))?;
     println!(
-        "publication=published commit={sha} device={} application={} pending={count}",
-        c.device,
-        if count == 0 { "applied" } else { "blocked" }
+        "publication=published commit={sha} device={} application=applied",
+        c.device
     );
-    Ok(count)
+    Ok(())
 }
-pub fn init(p: &Path, repo: PathBuf, device: String, tools: Vec<String>) -> Result<i32> {
+pub fn init(p: &Path, repo: PathBuf, device: String, adapter: Vec<String>) -> Result<i32> {
     ensure!(!p.exists(), "配置已存在；请编辑已有配置，不覆盖");
     config::safe_name(&device)?;
     let c = Local {
         repo: config::expand(&repo)?.canonicalize()?,
         device,
-        tools,
-        overrides: BTreeMap::new(),
-        after_apply: Vec::new(),
-        before_publish: Vec::new(),
-        module_adapter: Vec::new(),
+        module_adapter: adapter,
     };
     repo::check(&c.repo)?;
-    let m = manifest(&c.repo)?;
-    validate_local(&c, &m)?;
     fs::create_dir_all(p.parent().context("配置缺少父目录")?)?;
     fs::write(p, toml::to_string_pretty(&c)?)?;
     sync(p, "skillstow: 初始化", false, false)
 }
-fn perform(p: &Path, message: &str, approve_removals: bool) -> Result<i32> {
+fn perform(p: &Path, message: &str, approve_removals: bool, background: bool) -> Result<i32> {
     let c = config::load(p)?;
     repo::check(&c.repo)?;
-    // 先验证在线和本地契约；验证失败不创建提交，也不修改活动目录。
     repo::fetch(&c.repo)?;
-    let m = manifest(&c.repo)?;
-    validate_local(&c, &m)?;
-    hook(&c.before_publish, &c.repo)?;
+    // 后台每分钟调用：无本地修改、无远端更新且本机已应用时静默结束，不重复校验和应用。
+    let head = repo::git(&c.repo, &["rev-parse", "HEAD"])?;
+    if background
+        && !repo::dirty(&c.repo)?
+        && head == repo::git(&c.repo, &["rev-parse", "origin/main"])?
+        && applied(p, &head)?
+    {
+        return Ok(0);
+    }
+    // 先验证本地候选；验证失败不创建提交，也不修改活动目录。
+    validate(&c)?;
     repo::commit(&c.repo, message)?;
     for attempt in 0..3 {
         repo::rebase(&c.repo)?;
-        let m = manifest(&c.repo)?;
-        validate_local(&c, &m)?;
         repo::files(&c.repo)?;
-        for skill in m.skills.values() {
-            for v in skill.variants.values() {
-                ensure!(
-                    repo::git(
-                        &c.repo,
-                        &[
-                            "ls-files",
-                            "--others",
-                            "--ignored",
-                            "--exclude-standard",
-                            "--",
-                            repo::path(&v.path)?
-                        ]
-                    )?
-                    .is_empty(),
-                    "包内资源被 gitignore 排除：{}",
-                    v.path.display()
-                );
-            }
-        }
-        hook(&c.before_publish, &c.repo)?;
-        let removals = report_impact(&c, &m)?;
+        validate(&c)?;
+        let removals = match module_run(&c, &c.repo, &["impact"])? {
+            0 => false,
+            3 => true,
+            code => anyhow::bail!("模块影响分析失败：{code}"),
+        };
         ensure!(
             !removals || approve_removals,
-            "包含删除或版本替换；核对 impact 并取得发起端授权后使用 --approve-removals"
+            "包含删除或范围收缩；核对 impact 并取得发起端授权后使用 --approve-removals"
         );
         let sha = repo::git(&c.repo, &["rev-parse", "HEAD"])?;
-        // 接收已发布版本时只需应用，避免每分钟重复 push 和再次 fetch。
+        // 接收已发布版本时只需应用，避免重复 push 和再次 fetch。
         if sha == repo::git(&c.repo, &["rev-parse", "origin/main"])? {
             ensure!(!repo::dirty(&c.repo)?, "应用前出现新修改，请继续同步");
-            return Ok(if activate(p, &c, &sha)? == 0 { 0 } else { 1 });
+            activate(p, &c, &sha)?;
+            return Ok(0);
         }
         match repo::git(&c.repo, &["push", "origin", "HEAD:refs/heads/main"]) {
             Ok(_) => {
@@ -240,8 +155,8 @@ fn perform(p: &Path, message: &str, approve_removals: bool) -> Result<i32> {
                     !repo::dirty(&c.repo)?,
                     "发布期间出现新修改，请继续同步；本次已发布 {sha}"
                 );
-                let pending = activate(p, &c, &sha)?;
-                return Ok(if pending == 0 { 0 } else { 1 });
+                activate(p, &c, &sha)?;
+                return Ok(0);
             }
             Err(e) => {
                 if attempt == 2 {
@@ -270,7 +185,7 @@ pub fn sync(p: &Path, message: &str, background: bool, approve_removals: bool) -
         println!("等待 60 秒静默窗口");
         return Ok(0);
     }
-    perform(p, message, approve_removals)
+    perform(p, message, approve_removals, background)
 }
 pub fn edit(p: &Path, command: Edit) -> Result<i32> {
     let _lock = lock(p)?;
@@ -278,8 +193,7 @@ pub fn edit(p: &Path, command: Edit) -> Result<i32> {
     match command {
         Edit::Begin => {
             ensure!(!marker.exists(), "已有维护任务；继续编辑后运行 edit finish");
-            let code = perform(p, "skillstow: 维护前同步", false)?;
-            ensure!(code == 0, "本机应用尚有阻塞，请先处理 pending.md");
+            perform(p, "skillstow: 维护前同步", false, false)?;
             let c = config::load(p)?;
             fs::write(&marker, repo::git(&c.repo, &["rev-parse", "HEAD"])?)?;
             println!("edit_path={}", c.repo.display());
@@ -290,11 +204,9 @@ pub fn edit(p: &Path, command: Edit) -> Result<i32> {
             approve_removals,
         } => {
             ensure!(marker.exists(), "没有维护任务，请先 edit begin");
-            let code = perform(p, &message, approve_removals)?;
-            if code == 0 {
-                fs::remove_file(marker)?;
-            }
-            Ok(code)
+            perform(p, &message, approve_removals, false)?;
+            fs::remove_file(marker)?;
+            Ok(0)
         }
         Edit::Cancel => {
             ensure!(marker.exists(), "没有维护任务");
@@ -308,98 +220,25 @@ pub fn edit(p: &Path, command: Edit) -> Result<i32> {
 pub fn status(p: &Path) -> Result<i32> {
     let c = config::load(p)?;
     repo::check(&c.repo)?;
-    let m = manifest(&c.repo)?;
-    validate_local(&c, &m)?;
-    let pending = actions(&c, &m, &state(p, "published")?)?;
     let dirty = repo::dirty(&c.repo)?;
     let sha = repo::git(&c.repo, &["rev-parse", "HEAD"])?;
-    let active = state(p, "published")?;
-    let receipt: toml::Value = fs::read_to_string(state(p, "receipt.toml")?)
-        .ok()
-        .and_then(|text| toml::from_str(&text).ok())
-        .unwrap_or(toml::Value::Table(Default::default()));
-    let applied = receipt.get("applied").and_then(toml::Value::as_bool) == Some(true)
-        && receipt.get("commit").and_then(toml::Value::as_str) == Some(sha.as_str())
-        && active.exists()
-        && repo::git(&active, &["rev-parse", "HEAD"])? == sha
-        && !repo::dirty(&active)?;
+    let applied = applied(p, &sha)?;
     let upstream = repo::git(&c.repo, &["rev-parse", "origin/main"])?;
     println!(
-        "device={} head={sha} local_changes={dirty} applied={applied} planned_actions={} editing={}\n远端状态仅为最近 fetch；其他设备应用状态未知。",
+        "device={} head={sha} local_changes={dirty} applied={applied} editing={}\n远端状态仅为最近 fetch；其他设备应用状态未知。",
         c.device,
-        pending.len(),
         state(p, "editing")?.exists()
     );
-    for a in &pending {
-        println!("{a:?}");
-    }
-    Ok(
-        if !dirty && applied && pending.is_empty() && upstream == sha {
-            0
-        } else {
-            1
-        },
-    )
-}
-
-fn report_impact(c: &Local, candidate: &Manifest) -> Result<bool> {
-    if !c.module_adapter.is_empty() {
-        return match module_run(c, &["impact"])? {
-            0 => Ok(false),
-            3 => Ok(true),
-            code => anyhow::bail!("模块影响分析失败：{code}"),
-        };
-    }
-    let old: Manifest = toml::from_str(&repo::git(
-        &c.repo,
-        &["show", "origin/main:skillstow.toml"],
-    )?)?;
-    let changed = repo::git(&c.repo, &["diff", "--name-only", "-z", "origin/main", "--"])?;
-    let deleted = repo::git(
-        &c.repo,
-        &[
-            "diff",
-            "--name-only",
-            "--diff-filter=D",
-            "origin/main",
-            "--",
-        ],
-    )?;
-    let devices: std::collections::BTreeSet<_> =
-        old.devices.keys().chain(candidate.devices.keys()).collect();
-    let mut destructive = false;
-    for device in devices {
-        let before = if old.devices.contains_key(device) {
-            old.resolve(device)?
-        } else {
-            BTreeMap::new()
-        };
-        let after = if candidate.devices.contains_key(device) {
-            candidate.resolve(device)?
-        } else {
-            BTreeMap::new()
-        };
-        let touches = |paths: &str| {
-            paths.split('\0').filter(|s| !s.is_empty()).any(|file| {
-                before
-                    .values()
-                    .chain(after.values())
-                    .any(|root| Path::new(file).starts_with(root))
-            })
-        };
-        let removal = before.iter().any(|(s, p)| after.get(s) != Some(p)) || touches(&deleted);
-        let affected = before != after || touches(&changed);
-        if affected {
-            println!("impact device={device} removal_or_replacement={removal}");
-        }
-        destructive |= removal;
-    }
-    Ok(destructive)
+    Ok(if !dirty && applied && upstream == sha {
+        0
+    } else {
+        1
+    })
 }
 pub fn impact(p: &Path) -> Result<i32> {
     let c = config::load(p)?;
-    let m = manifest(&c.repo)?;
-    report_impact(&c, &m)?;
+    let code = module_run(&c, &c.repo, &["impact"])?;
+    ensure!(code == 0 || code == 3, "模块影响分析失败：{code}");
     println!("相对最近 fetch 的 origin/main；未跟踪文件将在同步提交后纳入最终影响分析。");
     Ok(0)
 }
@@ -435,38 +274,27 @@ fn quiet(p: &Path) -> Result<bool> {
     Ok(false)
 }
 
-fn hook(args: &[String], cwd: &Path) -> Result<()> {
-    if let Some(program) = args.first() {
-        ensure!(
-            std::process::Command::new(program)
-                .args(&args[1..])
-                .current_dir(cwd)
-                .stdin(std::process::Stdio::null())
-                .status()?
-                .success(),
-            "本机校验/应用钩子失败：{program}"
-        );
-    }
+fn validate(c: &Local) -> Result<()> {
+    ensure!(
+        module_run(c, &c.repo, &["validate"])? == 0,
+        "模块校验失败，未发布"
+    );
     Ok(())
 }
-
 // 只执行本机安装并明确配置的适配器，不执行内容仓中的任意程序。
-fn module_run(c: &Local, args: &[&str]) -> Result<i32> {
-    let program = c
-        .module_adapter
-        .first()
-        .context("本机未配置 module_adapter")?;
-    Ok(std::process::Command::new(program)
+fn module_run(c: &Local, repo: &Path, args: &[&str]) -> Result<i32> {
+    Ok(std::process::Command::new(&c.module_adapter[0])
         .args(&c.module_adapter[1..])
         .arg("--repo")
-        .arg(&c.repo)
+        .arg(repo)
         .args(args)
         .stdin(std::process::Stdio::null())
-        .status()?
+        .status()
+        .with_context(|| format!("运行模块适配器 {}", c.module_adapter[0]))?
         .code()
         .unwrap_or(2))
 }
 pub fn module(p: &Path, args: &[&str]) -> Result<i32> {
     let c = config::load(p)?;
-    module_run(&c, args)
+    module_run(&c, &c.repo, args)
 }

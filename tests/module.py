@@ -83,6 +83,14 @@ class ModuleTest(unittest.TestCase):
         self.assertEqual((active / 'foreign/data').read_text(), 'keep')
         self.assertEqual((active / '.system/marker').read_text(), 'plugin')
 
+    def test_scope_removal_leaves_no_empty_directories(self):
+        self.write('shared/special/references/deep/note.md', 'resource')
+        self.apply('b', True)
+        self.m['skills']['special']['devices'] = ['a']; self.manifest()
+        self.apply('b')
+        self.assertFalse((self.base / 'b/.codex/skills/special').exists())
+        self.assertTrue((self.base / 'b/.codex/skills/review/SKILL.md').exists())
+
     def test_executable_resource_keeps_mode(self):
         if os.name == 'nt': self.skipTest('Unix executable mode')
         self.write('shared/review/scripts/run.sh', '#!/bin/sh\nexit 0\n')
@@ -97,17 +105,6 @@ class ModuleTest(unittest.TestCase):
         active.write_text('external')
         with self.assertRaisesRegex(ValueError, '外部修改'): self.apply('a')
         self.assertEqual(active.read_text(), 'external')
-
-    def test_legacy_runtime_migration_keeps_local_credentials(self):
-        home = self.base / 'a'; active = home / '.codex/skills'
-        secret = active / '.catalog/local/credentials.json'
-        secret.parent.mkdir(parents=True); secret.write_text('local-placeholder')
-        state = home / '.local/state/skillstow/runtime.json'
-        state.parent.mkdir(parents=True)
-        state.write_text(json.dumps({'files': {'legacy/SKILL.md': module.digest(active / 'legacy/SKILL.md')}}))
-        self.apply('a')
-        self.assertEqual(secret.read_text(), 'local-placeholder')
-        self.assertFalse((active / 'legacy/SKILL.md').exists())
 
     def test_adopt_removes_only_root_link_preserving_external_target(self):
         home = self.base / 'a'; target = self.base / 'external'
@@ -162,6 +159,11 @@ class ModuleTest(unittest.TestCase):
         actual = module.without_telemetry(value)
         self.assertEqual(actual['hooks']['PostToolUse'][0]['hooks'], [{'command': 'keep-me'}])
         self.assertEqual(actual['other'], 1)
+        husk = {'description': 'Best-effort Skill usage telemetry for Codex.', 'theme': 'dark',
+                'hooks': {'PostToolUse': [{'matcher': 'Skill', 'hooks': [{'command': 'python skill-use-telemetry.py'}]}],
+                          'Stop': [{'hooks': [{'command': 'keep-me'}]}]}}
+        self.assertEqual(module.without_telemetry_hooks(husk), {'theme': 'dark', 'hooks': {'Stop': [{'hooks': [{'command': 'keep-me'}]}]}})
+        self.assertEqual(module.without_telemetry_hooks({'hooks': {'PostToolUse': [{'hooks': [{'command': 'hook_skill_use.py'}]}]}}), {})
 
     def test_device_rules_are_scoped_and_update_with_sync(self):
         self.m['devices']['a'].update(ssh='user@cluster.example.org', global_rules='devices/a/rules.md')

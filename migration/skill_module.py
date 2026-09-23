@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""单一 Skills 模块：清单定位、按设备应用、精确影响分析和四端收据查询。"""
+"""单一 Skills 模块：清单定位、按设备应用、精确影响分析和各端收据查询。"""
 import argparse
 import base64
 import concurrent.futures
@@ -173,6 +173,7 @@ class Journal:
                     p.rmdir()
                 else:
                     unlink(p)
+            p.parent.mkdir(parents=True, exist_ok=True)
             if old[0] == 'file':
                 shutil.copy2(old[1], p)
             elif old[0] == 'link':
@@ -191,18 +192,32 @@ def without_telemetry(value):
     return value
 
 
+def without_telemetry_hooks(config):
+    """移除遥测命令后，一并清掉因此变空的 Hook 分组和遥测说明，其他设置原样保留。"""
+    cleaned = without_telemetry(config)
+    hooks = cleaned.get('hooks')
+    if isinstance(hooks, dict):
+        hooks = {event: [g for g in groups if not (isinstance(g, dict) and g.get('hooks') == [])] if isinstance(groups, list) else groups
+                 for event, groups in hooks.items()}
+        hooks = {event: groups for event, groups in hooks.items() if groups != []}
+        if hooks:
+            cleaned['hooks'] = hooks
+        else:
+            cleaned.pop('hooks')
+    if cleaned.get('description') == 'Best-effort Skill usage telemetry for Codex.':
+        cleaned.pop('description')
+    return cleaned
+
+
 def apply(root, m, device, home, adopt):
     active = home / '.codex/skills'
     state = home / '.local/state/skillstow/module.json'
     old = json.loads(state.read_text(encoding='utf-8')) if state.exists() else None
     files = files_for(root, m, device)
     hashes = {rel: digest(p) for rel, p in files.items()}
-    legacy = home / '.local/state/skillstow/runtime.json'
     if old:
         owned = old['files']
-    elif legacy.exists():
-        owned = json.loads(legacy.read_text(encoding='utf-8'))['files']
-    elif adopt:
+    elif adopt or not active.exists():
         owned = {}
     else:
         raise ValueError('首次接入需 --adopt；先核查原内容及备份范围')
@@ -231,10 +246,15 @@ def apply(root, m, device, home, adopt):
             journal.write(active / rel, source.read_bytes(), source.stat().st_mode & 0o777)
         for rel in owned.keys() - files.keys():
             journal.remove(active / relative(rel))
-        # 旧 runtime 生成的入口只移除链接；数据库、凭据和插件目录保留在原地。
-        if not old and active.exists():
+            # 资源或整个 Skill 退出本端后，逐级清掉留下的空目录。
+            parent = (active / relative(rel)).parent
+            while parent != active and parent.is_dir() and not linked(parent) and not any(parent.iterdir()):
+                parent.rmdir()
+                parent = parent.parent
+        # 首次接管只移除旧 Skill 入口链接；链接目标、凭据和插件目录保留在原地。
+        if not old and adopt and active.exists():
             for p in active.iterdir():
-                if linked(p) and p.name not in {Path(rel).parts[0] for rel in files} and ('.projections' in str(p.resolve()) or (adopt and (p / 'SKILL.md').is_file())):
+                if linked(p) and p.name not in selected_names and (p / 'SKILL.md').is_file():
                     journal.remove(p)
         for client in ('.agents', '.claude'):
             journal.link(home / client / 'skills', active)
@@ -248,7 +268,7 @@ def apply(root, m, device, home, adopt):
             p = home / rel
             if p.exists():
                 original = json.loads(p.read_text(encoding='utf-8'))
-                cleaned = without_telemetry(original)
+                cleaned = without_telemetry_hooks(original)
                 if cleaned != original:
                     journal.write(p, (json.dumps(cleaned, ensure_ascii=False, indent=2) + '\n').encode())
         if any(digest(active / rel) != h for rel, h in hashes.items()):
@@ -345,9 +365,6 @@ def main():
     a = p.parse_args(); root = a.repo.resolve() / 'system'
     m = load(root)
     if a.command == 'validate':
-        registry = tomllib.loads((a.repo / 'skillstow.toml').read_text(encoding='utf-8'))
-        if set(registry['devices']) != set(m['devices']) or any(registry['devices'][d]['platform'] != v['platform'] for d, v in m['devices'].items()):
-            raise ValueError('模块设备与 SkillStow 设备不一致')
         emit({'valid': True, 'skills': len(m['skills']), 'devices': list(m['devices'])})
     elif a.command == 'locate':
         e = m['skills'][a.skill]
@@ -357,6 +374,9 @@ def main():
     elif a.command == 'fleet':
         fleet(root, m, Path.home())
     else:
+        platform = {'darwin': 'macos', 'win32': 'windows'}.get(sys.platform, sys.platform)
+        if m['devices'].get(a.device, {}).get('platform') != platform:
+            raise ValueError(f'本机平台 {platform} 与清单设备 {a.device} 不符')
         apply(root, m, a.device, a.home, a.adopt)
     return 0
 

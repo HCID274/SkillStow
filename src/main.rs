@@ -1,13 +1,11 @@
 mod cmd;
 mod config;
-mod link;
-mod plan;
 mod repo;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(version, about = "完整 Skills 包的多设备 Git 同步")]
+#[command(version, about = "个人 Skills 模块的多设备 Git 同步")]
 struct Cli {
     #[arg(long, global = true)]
     config: Option<PathBuf>,
@@ -16,13 +14,14 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    /// 写入本机配置并首次同步；`--` 之后是模块适配器 argv。
     Init {
         #[arg(long)]
         repo: PathBuf,
         #[arg(long)]
         device: String,
-        #[arg(long, value_delimiter = ',')]
-        tools: Vec<String>,
+        #[arg(last = true, required = true)]
+        adapter: Vec<String>,
     },
     Sync {
         #[arg(short, long, default_value = "skillstow: 同步 Skills")]
@@ -62,8 +61,8 @@ fn main() {
             Action::Init {
                 repo,
                 device,
-                tools,
-            } => cmd::init(&p, repo, device, tools),
+                adapter,
+            } => cmd::init(&p, repo, device, adapter),
             Action::Sync {
                 message,
                 background,
