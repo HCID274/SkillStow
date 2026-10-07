@@ -24,10 +24,9 @@ class ModuleTest(unittest.TestCase):
         self.m = {'version': 1, 'devices': {
             'a': {'platform': 'linux', 'ssh': 'test@100.64.0.1'},
             'b': {'platform': 'windows', 'ssh': 'test@100.64.0.2'}}, 'skills': {}}
-        for name, devices in [('decision-grade-reporting', ['a', 'b']), ('review', ['a', 'b']), ('special', ['b'])]:
+        for name, devices in [('review', ['a', 'b']), ('special', ['b'])]:
             self.m['skills'][name] = {'source': f'shared/{name}', 'devices': devices}
             self.write(f'shared/{name}/SKILL.md', f'---\nname: {name}\ndescription: Test\n---\nOriginal\n')
-        self.write('shared/decision-grade-reporting/references/global-collaboration.md', 'Global\n')
         self.manifest()
         subprocess.run(['git', '-C', str(self.repo), 'add', '-A'], check=True)
         subprocess.run(['git', '-C', str(self.repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'initial'], check=True, capture_output=True)
@@ -183,9 +182,11 @@ class ModuleTest(unittest.TestCase):
         self.m['devices']['a'].update(ssh='user@cluster.example.org', global_rules='devices/a/rules.md')
         self.write('devices/a/rules.md', 'Cluster event rules\n'); self.manifest()
         self.apply('a', True); self.apply('b', True)
-        self.assertEqual((self.base / 'a/.codex/AGENTS.md').read_text(), 'Global\n\nCluster event rules\n')
-        self.assertEqual((self.base / 'b/.codex/AGENTS.md').read_text(), 'Global\n')
+        self.assertEqual((self.base / 'a/.codex/AGENTS.md').read_text(), 'Cluster event rules\n')
         self.assertEqual((self.base / 'a/.claude/CLAUDE.md').read_text(), '@../.codex/AGENTS.md\n')
+        # 没有设备规则的端写空入口，不再要求共享全局规则
+        self.assertEqual((self.base / 'b/.codex/AGENTS.md').read_text(), '')
+        self.assertEqual((self.base / 'b/.claude/CLAUDE.md').read_text(), '')
         self.write('devices/a/rules.md', 'Updated rules\n'); self.apply('a')
         self.assertIn('Updated rules', (self.base / 'a/.codex/AGENTS.md').read_text())
         self.m['devices']['a']['global_rules'] = '../outside'; self.manifest()

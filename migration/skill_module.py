@@ -96,9 +96,6 @@ def load(root):
                 raise ValueError(f'源不能含链接：{p}')
             if p.is_file() and (p.name.startswith('.env') or p.name in {'credentials.json', 'auth.json'}):
                 raise ValueError(f'凭据不能进入模块：{p}')
-    global_entry = m['skills'].get('decision-grade-reporting', {})
-    if set(global_entry.get('devices', [])) != set(m['devices']):
-        raise ValueError('每台设备必须启用统一协作规则')
     return m
 
 
@@ -313,12 +310,11 @@ def apply(root, m, device, home, adopt):
             journal.link(home / client / 'skills', active)
         for path in projects.values():
             journal.link(Path(path) / '.claude/skills', Path(path) / '.agents/skills')
-        global_source = active / 'decision-grade-reporting/references/global-collaboration.md'
-        global_data = global_source.read_bytes()
-        if 'global_rules' in m['devices'][device]:
-            global_data += b'\n' + (root / relative(m['devices'][device]['global_rules'])).read_bytes()
+        # 10-07 用户删掉共享全局规则；只剩设备专属的 global_rules（没有就写空入口）
+        rules = m['devices'][device].get('global_rules')
+        global_data = (root / relative(rules)).read_bytes() if rules else b''
         journal.write(home / '.codex/AGENTS.md', global_data)
-        journal.write(home / '.claude/CLAUDE.md', b'@../.codex/AGENTS.md\n' if 'global_rules' in m['devices'][device] else b'@../.codex/skills/decision-grade-reporting/references/global-collaboration.md\n')
+        journal.write(home / '.claude/CLAUDE.md', b'@../.codex/AGENTS.md\n' if rules else b'')
         for rel in ('.codex/hooks.json', '.claude/settings.json'):
             p = home / rel
             if p.exists():

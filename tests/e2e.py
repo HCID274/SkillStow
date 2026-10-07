@@ -45,13 +45,11 @@ class SyncTest(unittest.TestCase):
         self.manifest = {'version': 1, 'devices': {
             'a': {'platform': PLATFORM, 'ssh': 'test@127.0.0.1'},
             'b': {'platform': PLATFORM, 'ssh': 'test@127.0.0.1'}}, 'skills': {
-            'decision-grade-reporting': {'source': 'shared/decision-grade-reporting', 'devices': ['a', 'b']},
             'review': {'source': 'shared/review', 'devices': ['a', 'b']},
             'special': {'source': 'devices/b/special', 'devices': ['b']}}}
         self.write_manifest(self.a)
         for name, source in [(n, e['source']) for n, e in self.manifest['skills'].items()]:
             write(self.a / 'system' / source / 'SKILL.md', skill(name))
-        write(self.a / 'system/shared/decision-grade-reporting/references/global-collaboration.md', 'Global\n')
         write(self.a / 'system/shared/review/references/check.md', 'common resource\n')
         git(self.a, 'add', '-A'); git(self.a, 'commit', '-m', 'initial'); git(self.a, 'push', '-u', 'origin', 'main')
         run('git', 'clone', self.origin, self.b)
@@ -100,7 +98,7 @@ class SyncTest(unittest.TestCase):
         self.assertEqual(self.active('a', 'review/references/check.md').read_text(), 'common resource\n')
         self.assertFalse(self.active('a', 'special').exists())
         self.assertTrue((self.home('b') / '.claude/skills/special/SKILL.md').is_file())
-        self.assertEqual((self.home('a') / '.codex/AGENTS.md').read_text(), 'Global\n')
+        self.assertEqual((self.home('a') / '.codex/AGENTS.md').read_text(), '')
         head = git(self.a, 'rev-parse', 'HEAD')
         self.cli('a', 'sync'); self.cli('a', 'status')
         self.assertEqual(head, git(self.a, 'rev-parse', 'HEAD'))

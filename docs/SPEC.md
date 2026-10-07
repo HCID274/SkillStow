@@ -37,7 +37,7 @@ edit begin 先对账并持久暂停本机后台发布；edit finish 发布完成
 
 全新设备本机没有 .codex/skills 时直接应用；已有个人内容时首次接入须显式 apply --adopt，核查后接管。修改前逐文件备份，检测到外部修改时停止；失败按本次日志回滚，不递归删除目录链接目标。凭据、.system 和其他非受管内容保留。
 
-共用全局规则由模块提供：Codex AGENTS.md 是程序生成的本机副本，Claude CLAUDE.md 引用同一正文；设备 global_rules 仅追加到该设备入口。旧会话不因文件已写入自动算已重载。模块不运行 LRU、SQLite 遥测或调用 Hook；应用时移除旧 Skills 遥测 Hook 及其留下的空分组，保留其他客户端设置。
+不再有共用全局规则（用户 2026-10-07 删除）：设备 global_rules 生成该设备的 Codex AGENTS.md，Claude CLAUDE.md 引用它；没有 global_rules 的设备两处都写空入口。旧会话不因文件已写入自动算已重载。模块不运行 LRU、SQLite 遥测或调用 Hook；应用时移除旧 Skills 遥测 Hook 及其留下的空分组，保留其他客户端设置。
 
 ## 返回与验证
 

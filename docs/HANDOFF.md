@@ -30,7 +30,7 @@
    - `~/.local/bin` 中指向维护仓或已不存在目标的悬空链接。
    - 删除前用 `find ~ -xdev -type l` 确认没有外部链接指向要删的目录；项目目录的 .agents/.claude 若引用 .projections，先把这些项目 Skill 按项目范围登记到清单并发布。`.system`、插件、凭据以外的非受管内容保留。
 8. 验收：`skillstow --config ~/.config/skillstow/config.toml sync` 输出 application=applied；`status` 返回 0；紧接着 `sync --background` 无输出；`~/.config/skillstow/receipt.toml` 的 commit 等于 origin/main。等一分钟，确认 launchd 后台运行后收据仍是 applied=true，`~/.local/state/skillstow/sync.log` 不再每分钟增长（旧日志可先存档再清空）。`~/.codex/hooks.json` 中遗留的遥测空分组由新适配器在应用时自动清掉。
-9. 回报：按 decision-grade-reporting 给短回执，写明删除清单、备份位置、收据提交和验收输出。
+9. 回报：写明删除清单、备份位置、收据提交和验收输出。
 
 ## 待办二：plasma-fes（下一任务）
 
