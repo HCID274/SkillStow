@@ -124,6 +124,17 @@ def unlink(p):
         p.unlink()
 
 
+def drop_empty(d):
+    """只删不含任何文件或链接的目录树；遇到文件即停，返回 d 是否已删。"""
+    if linked(d) or not d.is_dir():
+        return False
+    for child in list(d.iterdir()):
+        if not drop_empty(child):
+            return False
+    d.rmdir()
+    return True
+
+
 def directory_link(target, dest):
     if os.name == 'nt':
         p = subprocess.run(['cmd', '/D', '/C', 'mklink', '/J', str(dest), str(target)], capture_output=True)
@@ -296,10 +307,9 @@ def apply(root, m, device, home, adopt):
             if rel in files and path == target(rel)[0]:
                 continue
             journal.remove(path)
-            # 资源或整个 Skill 退出本端后，逐级清掉留下的空目录。
+            # 资源或整个 Skill 退出本端后，逐级清掉留下的空目录（含客户端留下的空子目录）。
             parent = path.parent
-            while parent != stop and parent.is_dir() and not linked(parent) and not any(parent.iterdir()):
-                parent.rmdir()
+            while parent != stop and drop_empty(parent):
                 parent = parent.parent
         # 首次接管只移除旧 Skill 入口链接；链接目标、凭据和插件目录保留在原地。
         if not old and adopt and active.exists():

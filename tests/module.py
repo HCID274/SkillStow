@@ -99,6 +99,8 @@ class ModuleTest(unittest.TestCase):
     def test_scope_removal_leaves_no_empty_directories(self):
         self.write('shared/special/references/deep/note.md', 'resource')
         self.apply('b', True)
+        # 客户端可能在 Skill 下留空子目录（如 agents/），退出时一并清掉。
+        (self.base / 'b/.codex/skills/special/agents').mkdir()
         self.m['skills']['special']['devices'] = ['a']; self.manifest()
         self.apply('b')
         self.assertFalse((self.base / 'b/.codex/skills/special').exists())
