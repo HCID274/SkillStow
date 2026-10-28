@@ -194,6 +194,60 @@ class ModuleTest(unittest.TestCase):
         self.m['devices']['a']['global_rules'] = '../outside'; self.manifest()
         with self.assertRaises(ValueError): module.load(self.root)
 
+    def claude_source(self):
+        self.write('shared/claude/agents/code-reviewer.md', 'reviewer\n')
+        self.write('shared/claude/hooks/review_gate.py', 'gate\n')
+        self.write('shared/claude/tests/test_review_gate.py', 'not installed\n')
+        self.m['devices']['a']['claude'] = 'shared/claude'; self.manifest()
+
+    def test_claude_files_and_review_hooks_follow_device_scope(self):
+        home = self.base / 'a'; settings = home / '.claude/settings.json'
+        original = {'theme': 'dark', 'hooks': {'PreToolUse': [{'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': 'python3 guard-bash.py'}]}],
+                                               'Stop': [{'hooks': [{'type': 'command', 'command': 'notify.sh'}]}]}}
+        settings.parent.mkdir(parents=True); settings.write_text(json.dumps(original), encoding='utf-8')
+        self.claude_source(); self.apply('a', True)
+        self.assertEqual((home / '.claude/agents/code-reviewer.md').read_text(), 'reviewer\n')
+        self.assertEqual((home / '.claude/hooks/review_gate.py').read_text(), 'gate\n')
+        self.assertFalse((home / '.claude/tests').exists())
+        merged = json.loads(settings.read_text(encoding='utf-8'))
+        ours = [h for groups in merged['hooks'].values() for g in groups for h in g['hooks'] if 'review_gate.py' in h['command']]
+        self.assertEqual(len(ours), 5)
+        self.assertEqual({h.get('if') for h in ours}, {None, 'Bash(git commit*)', 'Bash(git -C *)', 'PowerShell(git commit*)', 'PowerShell(git -C *)'})
+        self.assertEqual(module.with_review_hooks(merged, None), original)
+        self.assertNotIn('~claude', json.loads((home / '.local/state/skillstow/module.json').read_text(encoding='utf-8'))['skills'])
+        backups = set((home / '.local/state/skillstow/backups').iterdir())
+        self.apply('a')
+        self.assertEqual(set((home / '.local/state/skillstow/backups').iterdir()), backups)
+        del self.m['devices']['a']['claude']; self.manifest(); self.apply('a')
+        self.assertFalse((home / '.claude/agents/code-reviewer.md').exists())
+        self.assertTrue((home / '.claude/agents').is_dir())
+        self.assertEqual(json.loads(settings.read_text(encoding='utf-8')), original)
+
+    def test_review_hooks_replace_legacy_entries_and_reject_bad_settings(self):
+        legacy = {'hooks': {'SubagentStop': [{'matcher': 'code-reviewer', 'hooks': [{'type': 'command', 'command': 'pwsh -File review-gate.ps1'}]}]}}
+        merged = module.with_review_hooks(legacy, '"py" -X utf8 "review_gate.py"')
+        self.assertNotIn('review-gate.ps1', json.dumps(merged))
+        self.assertEqual(len(merged['hooks']['SubagentStop']), 1)
+        self.assertEqual(module.with_review_hooks(legacy, None), {})
+        settings = self.base / 'a/.claude/settings.json'
+        settings.parent.mkdir(parents=True); settings.write_text('{"hooks": {,}', encoding='utf-8')
+        self.claude_source()
+        with self.assertRaisesRegex(ValueError, '不是合法 JSON'): self.apply('a', True)
+        self.assertEqual(settings.read_text(encoding='utf-8'), '{"hooks": {,}')
+        self.assertFalse((self.base / 'a/.claude/agents/code-reviewer.md').exists())
+
+    def test_claude_impact_marks_device_removal(self):
+        self.claude_source()
+        with patch.object(module, 'emit') as emit:
+            self.assertEqual(module.impact(self.repo, self.root, self.m), 0)
+            self.assertIn({'skill': '~claude', 'devices': ['a'], 'removal_or_replacement': False}, emit.call_args.args[0]['impact'])
+        subprocess.run(['git', '-C', str(self.repo), 'add', '-A'], check=True)
+        subprocess.run(['git', '-C', str(self.repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'claude'], check=True, capture_output=True)
+        subprocess.run(['git', '-C', str(self.repo), 'update-ref', 'refs/remotes/origin/main', 'HEAD'], check=True)
+        del self.m['devices']['a']['claude']; self.manifest()
+        with patch.object(module, 'emit'):
+            self.assertEqual(module.impact(self.repo, self.root, self.m), 3)
+
     def test_project_skill_lands_only_in_its_project(self):
         proj = self.project(); proj.mkdir()
         self.write('projects/proj/tool/references/deep/note.md', 'resource')

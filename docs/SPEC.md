@@ -26,7 +26,7 @@ edit begin 先对账并持久暂停本机后台发布；edit finish 发布完成
 
 ## 统一模块
 
-私人内容仓的 system/manifest.json 是唯一清单：version、devices（平台、SSH 端点，可选 global_rules 与 projects）、skills（源目录及适用设备或所属项目）。共享源在 system/shared/，设备专属源在 system/devices/，项目专属源在 system/projects/；每端完整 checkout，应用阶段按清单筛选。
+私人内容仓的 system/manifest.json 是唯一清单：version、devices（平台、SSH 端点，可选 global_rules、projects 与 claude）、skills（源目录及适用设备或所属项目）。共享源在 system/shared/，设备专属源在 system/devices/，项目专属源在 system/projects/；每端完整 checkout，应用阶段按清单筛选。
 
 - locate ID：输出该 Skill 的源路径、设备范围和清单路径。
 - impact：对比最近 fetch 的 origin/main，输出受影响 Skills、设备及删除/替换状态，含未跟踪新资源；删除或替换返回 3，CLI 转为授权检查。
@@ -34,6 +34,7 @@ edit begin 先对账并持久暂停本机后台发布；edit finish 发布完成
 - validate：核对清单、设备、入口和资源；未知范围、链接或外逸路径拒绝发布。
 - apply：先核对本机平台与清单一致，再复制到 .codex/skills，并把 .agents/skills 与 .claude/skills 链到该目录（Windows 用 junction，Unix 用软链）。资源或 Skill 退出本端时同时清掉留下的空目录。
 - 项目范围：设备的 projects 把项目名映射到本机绝对路径；Skill 用 project 代替 devices，只应用到登记该项目的设备，落到 <项目>/.agents/skills，并把 <项目>/.claude/skills 链到该目录，不进入全局 .codex/skills。收据键以 @项目 开头并记录项目路径；项目退出或路径变更按删除/替换授权，并清掉旧位置。项目目录不存在时应用失败；旧投影链接只替换链接自身；已接管文件被 git clean 清掉时直接补回。
+- claude：设备登记 claude 源目录时，其 agents/、hooks/ 复制到 ~/.claude 同名目录（收据键前缀 ~claude/），并把提交前复核钩子合并进 ~/.claude/settings.json：只增删命令含 review_gate.py（及旧版 review-gate.ps1）的条目，命令写运行本模块的同一个 Python 的绝对路径；设置不是合法 JSON 时停止、不写。设备退出时删掉这些文件和条目。
 
 全新设备本机没有 .codex/skills 时直接应用；已有个人内容时首次接入须显式 apply --adopt，核查后接管。修改前逐文件备份，检测到外部修改时停止；失败按本次日志回滚，不递归删除目录链接目标。凭据、.system 和其他非受管内容保留。
 

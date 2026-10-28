@@ -15,6 +15,10 @@ import tempfile
 import time
 import tomllib
 
+# 设备登记了 claude 源目录时，其 agents/、hooks/ 装到 ~/.claude 下同名目录；收据键用这个前缀。
+CLAUDE = '~claude/'
+GATE = 'hooks/review_gate.py'
+
 
 def emit(value):
     print(json.dumps(value, ensure_ascii=False, indent=2))
@@ -50,6 +54,10 @@ def scope(m, entry):
 def destination(active, projects, rel):
     """项目 Skill 的收据键以 @项目 开头，落到该项目的 .agents/skills；其余落到 .codex/skills。"""
     p = relative(rel)
+    if p.parts[0] == CLAUDE[:-1]:
+        # active 是 ~/.codex/skills；止于 agents/、hooks/ 本身，清理空目录时不删这两个目录
+        base = active.parent.parent / '.claude' / p.parts[1]
+        return base / Path(*p.parts[2:]), base
     if p.parts[0].startswith('@'):
         base = Path(projects[p.parts[0][1:]]) / '.agents/skills'
         return base / Path(*p.parts[1:]), base
@@ -76,6 +84,11 @@ def load(root):
             rules = root / relative(d['global_rules'])
             if not rules.is_file() or rules.is_symlink() or not rules.resolve().is_relative_to(root.resolve()):
                 raise ValueError(f'非法设备规则：{name}')
+        if 'claude' in d:
+            source = root / relative(d['claude'])
+            if not source.is_dir() or linked(source) or not source.resolve().is_relative_to(root.resolve()) \
+                    or any(linked(p) for p in source.rglob('*')):
+                raise ValueError(f'非法 Claude Code 源目录：{name}')
     for name, entry in m['skills'].items():
         if not re.fullmatch(r'[a-z0-9-]+', name) or set(entry) not in ({'source', 'devices'}, {'source', 'project'}):
             raise ValueError(f'非法 Skill：{name}')
@@ -110,6 +123,12 @@ def files_for(root, m, device):
         for p in source.rglob('*'):
             if p.is_file():
                 files[(prefix / p.relative_to(source)).as_posix()] = p
+    if 'claude' in m['devices'][device]:
+        source = root / relative(m['devices'][device]['claude'])
+        for sub in ('agents', 'hooks'):
+            for p in (source / sub).rglob('*'):
+                if p.is_file() and '__pycache__' not in p.parts:
+                    files[CLAUDE + p.relative_to(source).as_posix()] = p
     return files
 
 
@@ -245,12 +264,43 @@ def without_telemetry_hooks(config):
     return cleaned
 
 
+def with_review_hooks(config, command):
+    """去掉提交前复核钩子的旧条目（含 Windows 旧版 review-gate.ps1），command 不为空时按本机路径重新加上；其他设置原样保留。"""
+    config = json.loads(json.dumps(config))
+    hooks = config.get('hooks', {})
+    ours = lambda h: isinstance(h, dict) and any(s in str(h.get('command', '')) for s in ('review_gate.py', 'review-gate.ps1'))
+    for event in ('PreToolUse', 'SubagentStop'):
+        groups = []
+        for g in hooks.get(event, []):
+            if isinstance(g, dict) and isinstance(g.get('hooks'), list) and any(ours(h) for h in g['hooks']):
+                g = {**g, 'hooks': [h for h in g['hooks'] if not ours(h)]}
+                if not g['hooks']:
+                    continue
+            groups.append(g)
+        if command:
+            entry = lambda rule=None: {'type': 'command', **({'if': rule} if rule else {}), 'command': command, 'timeout': 60}
+            groups += ([{'matcher': tool, 'hooks': [entry(f'{tool}(git commit*)'), entry(f'{tool}(git -C *)')]} for tool in ('Bash', 'PowerShell')]
+                       if event == 'PreToolUse' else [{'matcher': 'code-reviewer', 'hooks': [entry()]}])
+        if groups:
+            hooks[event] = groups
+        else:
+            hooks.pop(event, None)
+    if hooks:
+        config['hooks'] = hooks
+    else:
+        config.pop('hooks', None)
+    return config
+
+
 def apply(root, m, device, home, adopt):
     active = home / '.codex/skills'
     state = home / '.local/state/skillstow/module.json'
     old = json.loads(state.read_text(encoding='utf-8')) if state.exists() else None
     files = files_for(root, m, device)
-    hashes = {rel: digest(p) for rel, p in files.items()}
+    # 提交前复核钩子用跑本模块的同一个 Python，写绝对路径（Windows 的 python 可能是应用商店占位程序）
+    gate = home / '.claude' / GATE
+    command = f'"{Path(sys.executable).as_posix()}" -X utf8 "{gate.as_posix()}"' if CLAUDE + GATE in files else None
+    hashes ={rel: digest(p) for rel, p in files.items()}
     used = {rel.split('/')[0][1:] for rel in files if rel.startswith('@')}
     projects = {k: v for k, v in m['devices'][device].get('projects', {}).items() if k in used}
     previous = (old or {}).get('projects', {})
@@ -270,7 +320,7 @@ def apply(root, m, device, home, adopt):
         owned = {}
     else:
         raise ValueError('首次接入需 --adopt；先核查原内容及备份范围')
-    selected_names = {Path(rel).parts[0] for rel in files if not rel.startswith('@')}
+    selected_names = {Path(rel).parts[0] for rel in files if not rel.startswith(('@', CLAUDE))}
     if not old and adopt and active.exists():
         # 首次精简也纳入旧 runtime 清单外的个人 Skill；插件和本机秘密不接管。
         for d in active.iterdir():
@@ -327,11 +377,17 @@ def apply(root, m, device, home, adopt):
         journal.write(home / '.claude/CLAUDE.md', b'@../.codex/AGENTS.md\n' if rules else b'')
         for rel in ('.codex/hooks.json', '.claude/settings.json'):
             p = home / rel
-            if p.exists():
-                original = json.loads(p.read_text(encoding='utf-8'))
-                cleaned = without_telemetry_hooks(original)
-                if cleaned != original:
-                    journal.write(p, (json.dumps(cleaned, ensure_ascii=False, indent=2) + '\n').encode())
+            if not p.exists() and not (command and rel == '.claude/settings.json'):
+                continue
+            try:
+                original = json.loads(p.read_text(encoding='utf-8')) if p.exists() else {}
+            except json.JSONDecodeError as e:
+                raise ValueError(f'{p} 不是合法 JSON，没有改动：{e}')
+            cleaned = without_telemetry_hooks(original)
+            if rel == '.claude/settings.json':
+                cleaned = with_review_hooks(cleaned, command)
+            if cleaned != original:
+                journal.write(p, (json.dumps(cleaned, ensure_ascii=False, indent=2) + '\n').encode())
         if any(digest(target(rel)[0]) != h for rel, h in hashes.items()):
             raise RuntimeError('落盘校验失败')
         project_skills = {k: sorted({rel.split('/')[1] for rel in files if rel.startswith(f'@{k}/')}) for k in sorted(projects)}
@@ -373,6 +429,13 @@ def impact(repo, root, m):
         destructive |= any(f.startswith(s) for f in deleted if f for s in sources)
         removal |= destructive
         result.append({'skill': name, 'devices': devices, 'removal_or_replacement': destructive})
+    before = {d: v['claude'] for d, v in old.get('devices', {}).items() if 'claude' in v}
+    after = {d: v['claude'] for d, v in m['devices'].items() if 'claude' in v}
+    sources = [f'system/{s}/' for s in {*before.values(), *after.values()}]
+    if before != after or any(f.startswith(s) for f in changed if f for s in sources):
+        destructive = bool(before.items() - after.items()) or any(f.startswith(s) for f in deleted if f for s in sources)
+        removal |= destructive
+        result.append({'skill': CLAUDE[:-1], 'devices': sorted(before.keys() | after.keys()), 'removal_or_replacement': destructive})
     emit({'impact': result, 'removal_or_replacement': removal})
     return 3 if removal else 0
 
